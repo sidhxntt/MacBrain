@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:NotchBrain}",
+            "name": "Debug NotchBrain",
+            "target": "NotchBrain",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug NotchBrain"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:NotchBrain}",
+            "name": "Release NotchBrain",
+            "target": "NotchBrain",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release NotchBrain"
+        }
+    ]
+}

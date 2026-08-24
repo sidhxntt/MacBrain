@@ -1,0 +1,173 @@
+# Architecture Selection Guide
+
+Use this reference when the user asks for an architecture recommendation.
+
+## Decision Matrix
+
+| Factor | MVVM | MVI | TCA | Clean | VIPER | Reactive | MVP | Coordinator |
+|--------|------|-----|-----|-------|-------|----------|-----|-------------|
+| State complexity | Low–Med | High | High | Med–High | Med | Med | Low–Med | N/A (navigation layer) |
+| Unidirectional flow | Optional | Strict | Strict | N/A | N/A | Stream-based | Optional | N/A |
+| Composition / modularity | Feature-level | Feature-level | Strong (Scope/forEach) | Layer-level | Module-level | Operator-level | Feature-level | Flow-level |
+| Testing determinism | Good | Very high | Very high (TestStore) | Good | Good | Good (with schedulers) | Good | Good |
+| Boilerplate | Low | Medium | Medium–High | Medium–High | High | Low–Medium | Medium | Low–Medium |
+| SwiftUI fit | Excellent | Good | Excellent | Good | Fair (UIKit-native) | Good | Fair | Good |
+| UIKit fit | Good | Good | Good | Good | Excellent | Good | Excellent | Excellent |
+| Team learning curve | Low | Medium | High | Medium | Medium–High | Medium | Low | Low |
+| Async/effect orchestration | Manual | Structured | Built-in | Manual | Manual | Operator-driven | Manual | N/A |
+| Framework dependency | None | None | swift-composable-architecture | None | None | Combine or RxSwift; optional test scheduler | None | None |
+
+## UI Stack Nuance by Architecture
+
+- **MVVM**: SwiftUI favors direct state binding; UIKit/mixed favors coordinator-driven navigation.
+- **MVI**: SwiftUI uses store-bound views; UIKit maps events to intents and renders from store state.
+- **TCA**: SwiftUI uses `StoreOf` in views; UIKit uses a controller render loop from `ViewStore`.
+- **Clean Architecture**: Domain/data stay the same; only presentation adapters differ.
+- **VIPER**: UIKit-native fit; SwiftUI usually uses an adapter plus `UIHostingController`.
+- **Reactive**: SwiftUI keeps pipelines in observable models; UIKit keeps them in Presenter/ViewModel.
+- **MVP**: UIKit-native fit; Presenter drives passive View via protocol commands; SwiftUI uses an observable adapter.
+- **Coordinator**: Works with both stacks; UIKit uses `UINavigationController` wrapper; SwiftUI models navigation as value-type state bound to `NavigationStack`.
+
+## Observation Model (`@Observable` vs `ObservableObject`)
+
+The deployment target determines which observation mechanism to use. This affects SwiftUI wiring in every architecture:
+
+| Factor | `@Observable` (iOS 17+) | `ObservableObject` (iOS 14–16) |
+|--------|--------------------------|-------------------------------|
+| Import | `import Observation` (or none — built-in) | `import Combine` |
+| Property tracking | Fine-grained (per-property) | Coarse (any `@Published` change re-renders) |
+| View ownership | `@State` | `@StateObject` |
+| Binding access | `@Bindable` | `@ObservedObject` / `$property` |
+| Combine interop | Manual (wrap with `Publisher`) | Native (`$property` is a publisher) |
+| UIKit integration | Observe with `withObservationTracking` or use KVO bridge | Subscribe to `objectWillChange` or `@Published` publishers |
+| TCA | Uses `@ObservableState` macro (built on Observation) | Older `ViewStore`-based API |
+
+**When to use `@Observable`:**
+- iOS 17+ deployment target
+- SwiftUI-first features where fine-grained re-rendering matters
+- New code without existing Combine subscriber chains
+
+**When to keep `ObservableObject`:**
+- iOS 16 or earlier deployment target
+- Existing UIKit code subscribing to `@Published` properties via Combine
+- Shared models that expose publishers to multiple consumers
+- Gradual migration: keep `ObservableObject` on existing types, use `@Observable` on new types
+
+## Quick Decision Flow
+
+```text
+1. Is the feature stream-heavy (search, live feeds, real-time updates)?
+   YES -> Mark Reactive (references/reactive.md) as a stream concern. Continue to choose the owning presentation/layering pattern below unless the task is only about stream composition.
+   NO  -> Continue
+
+2. Is strict unidirectional data flow and state-machine modeling required?
+   YES -> Is the app already TCA-based, or is adding TCA dependency acceptable?
+          YES -> TCA (references/tca.md)
+          NO  -> MVI (references/mvi.md)
+   NO  -> Continue
+
+3. Does the codebase need strict layer isolation with replaceable infrastructure?
+   YES -> Clean Architecture (references/clean-architecture.md)
+   NO  -> Continue
+
+4. Is this a large UIKit codebase needing strict per-feature separation?
+   YES -> VIPER (references/viper.md)
+   NO  -> Continue
+
+5. Is the primary goal decoupling navigation from screens (deep linking, reusable flows)?
+   YES -> Mark Coordinator (references/coordinator.md) as the flow concern. If screens also need state/presentation guidance, pair it with MVVM, MVP, TCA, or MVI below.
+   NO  -> Continue
+
+6. Is UIKit the primary stack and a fully passive View with zero logic desired?
+   YES -> MVP (references/mvp.md)
+   NO  -> Continue
+
+7. Default recommendation:
+   -> MVVM (references/mvvm.md)
+```
+
+## Inference from User Constraints
+
+Use these request signals:
+
+### Signals pointing to MVVM
+- "simple feature", "screen-level state", "standard iOS pattern"
+- small/medium feature without strict state-machine needs
+
+### Signals pointing to MVI
+- "state machine", "deterministic transitions", "unidirectional"
+- need to replay/serialize state transitions
+
+### Signals pointing to TCA
+- "composable", "TestStore", "pointfree", mentions of TCA
+- existing TCA codebase or strong child-feature composition needs
+
+### Signals pointing to Clean Architecture
+- "layers", "use cases", "dependency rule", "hexagonal"
+- stable module boundaries and replaceable infrastructure are priorities
+
+### Signals pointing to VIPER
+- "module", "router", "presenter", legacy UIKit codebase
+- strict role separation in large UIKit modules
+
+### Signals pointing to Reactive
+- "streams", "Combine", "RxSwift", "real-time", "search"
+- feature behavior is event-pipeline driven (typeahead, WebSocket, live feeds)
+
+### Signals pointing to MVP
+- "passive view", "presenter drives view", "UIKit without observable state"
+- migrating from MVC with minimal framework changes
+- team prefers explicit command-dispatch over state binding
+
+### Signals pointing to Coordinator
+- "navigation", "deep linking", "flow", "routing", "decouple navigation"
+- multiple screens need to be reused across different flows
+- view controllers or ViewModels currently contain push/present calls
+
+## Validating User-Requested Architectures
+
+When the user pre-selects an architecture, validate it before finalizing:
+
+1. Check fit across:
+   - UI stack (SwiftUI/UIKit/mixed)
+   - minimum deployment target (determines `@Observable` vs `ObservableObject` wiring)
+   - feature complexity and state model needs
+   - effect orchestration requirements
+   - team familiarity and dependency tolerance
+   - alignment with existing codebase conventions
+2. Decide whether the request is a `fit` or a `mismatch`.
+3. Respond based on the result:
+   - `fit`: proceed with requested architecture
+   - `mismatch`: recommend closest-fit alternative and explain why
+
+If the user insists on a mismatched choice, proceed with the requested architecture but include a risk-mitigation plan.
+
+## Combining Architectures
+
+Some projects use multiple patterns. Common valid combinations:
+
+- **MVVM + Reactive**: MVVM structure with Combine/Rx pipelines inside ViewModels
+- **Clean Architecture + MVVM**: Clean layers for domain/data, MVVM for presentation
+- **Clean Architecture + TCA**: Clean layers for domain/data, TCA for feature presentation
+- **VIPER + Reactive**: VIPER module structure with reactive Interactors
+- **MVVM + Coordinator**: MVVM for screen-level state, Coordinator for navigation flows
+- **MVP + Coordinator**: MVP for presentation logic, Coordinator for navigation and routing
+- **Clean Architecture + MVP**: Clean layers for domain/data, MVP for presentation
+
+Combination selection rules:
+- Choose one **primary** pattern for the user's main boundary: feature state/presentation, domain layering, or navigation flow.
+- Choose a **secondary** pattern only for a distinct concern such as navigation (`Coordinator`) or streams (`Reactive`).
+- Read both playbooks when recommending a combination, then explicitly say which files/modules each pattern owns.
+- Do not recommend multiple full presentation patterns for the same feature boundary unless the task is a migration between them.
+
+When combining, clarify which pattern governs which layer and keep boundaries consistent.
+
+## Recommendation Format
+
+When recommending:
+
+1. Name one pattern and provide a fit result (`fit` or `mismatch`).
+2. Give 1-2 concise reasons grounded in user constraints.
+3. Cite the reference file.
+4. If `mismatch`, include the closest-fit alternative and one trade-off.
+5. Apply the selected playbook to the user’s feature.

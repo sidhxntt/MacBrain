@@ -16,7 +16,7 @@ Create the launchable Swift macOS application and edge-attached sidebar before a
 ## Implementation sequence
 
 - [ ] Inspect the repository and preserve its existing Xcode/SwiftPM structure.
-- [ ] Create `NotchBrainApp.swift` and a dependency-injected application coordinator.
+- [ ] Create `MacBrainApp.swift` and a dependency-injected application coordinator.
 - [ ] Create `SidebarPanelController` using an `NSPanel` configured for floating, non-activating behavior where appropriate.
 - [ ] Position the panel against the active screen’s visible frame and recalculate on display changes.
 - [ ] Add minimum/maximum width constraints and compact/expanded presentation state.

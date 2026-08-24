@@ -19,6 +19,26 @@
             "target": "NotchBrain",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release NotchBrain"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:NotchBrain}",
+            "name": "Debug MacBrain",
+            "target": "MacBrain",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug MacBrain"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:NotchBrain}",
+            "name": "Release MacBrain",
+            "target": "MacBrain",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release MacBrain"
         }
     ]
 }

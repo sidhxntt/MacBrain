@@ -1,8 +1,8 @@
-# Notch Brain Documentation
+# MacBrain Documentation
 
-This is the self-contained source of truth for Notch Brain, a native macOS, local-first AI memory and work assistant with a system-wide edge sidebar.
+This is the self-contained source of truth for MacBrain, a native macOS, local-first AI memory and work assistant with a system-wide edge sidebar.
 
-Documentation path in this workspace: `/Users/sidhxntt/Desktop/Code/Products/NotchBrain/docs`
+Documentation path in this workspace: `docs/`
 
 ## Read in this order
 
@@ -14,6 +14,26 @@ Documentation path in this workspace: `/Users/sidhxntt/Desktop/Code/Products/Not
 6. [Beta metrics](./beta-metrics.md) — measurable validation and release gates.
 7. [Notch Brain and Siri AI](./siri-ai-comparison.md) — product positioning and scope comparison.
 8. [Post-MVP roadmap](./superpowers/plans/2026-08-23-notch-brain-post-mvp.md) — future work, not MVP requirements.
+
+## Relative MVP difficulty
+
+Difficulty is relative to this project’s current native macOS, local-only scope.
+
+| Phase | Area | Difficulty | Why |
+|---|---|---:|---|
+| 01 | App shell | 4/10 | Native window, navigation, and visual polish are contained. |
+| 02 | Global activation and permissions | 7/10 | AppKit overlay behavior, focus, and macOS permission states are platform-sensitive. |
+| 03 | SQLite storage | 6/10 | Schema migrations, durability, and recovery need discipline but are well-bounded. |
+| 04 | Ollama provider | 8/10 | Local model availability, streaming, cancellation, hardware limits, and setup failure paths. |
+| 05 | Indexing | 8/10 | Incremental file discovery, connector permissions, deletion, provenance, and reliable background refresh. |
+| 06 | Retrieval and citations | 10/10 | Hybrid ranking, evidence budgets, answer grounding, exact citations, and quality evaluation are core product risk. |
+| 07 | Knowledge graph | 9/10 | Entity/relationship extraction and graph expansion must improve retrieval without adding false confidence. |
+| 08 | Chat and memories | 5/10 | Conversation UX is straightforward; durable memories still need clear user control. |
+| 09 | Live context and safeguards | 9/10 | Privacy boundaries, redaction, app integration, cancellation, and memory/resource limits must all hold together. |
+| 10 | Hardening and release | 8/10 | Signing, clean-machine setup, recovery, privacy validation, and release reliability expose cross-phase failures. |
+
+**Hardest:** Phase 06, then Phases 07 and 09.
+**Easiest:** Phase 01, then Phases 08 and 03.
 
 ## Authority and scope
 

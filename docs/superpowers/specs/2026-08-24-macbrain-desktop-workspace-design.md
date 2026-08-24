@@ -51,7 +51,7 @@ The desktop shell is split into small SwiftUI views: main navigation, chat works
 
 - If sidebar cannot obtain a screen, main workspace remains usable and sidebar action fails safely.
 - Closing or hiding sidebar never closes desktop workspace.
-- App termination stops overlay controllers and automatic source synchronization.
+- App termination stops overlay controllers. Local connectors sync only after a user explicitly connects or manually syncs one.
 - Existing local-only source behavior remains unchanged; this work does not expand data collection.
 
 ## Tests

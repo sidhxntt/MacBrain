@@ -22,28 +22,28 @@ The knowledge graph is included from the beginning as a lightweight SQLite graph
 
 Create a package-first structure unless the existing repository already establishes an Xcode structure:
 
-- `NotchBrain/NotchBrainApp.swift` — app entry point and scene lifecycle.
-- `NotchBrain/UI/SidebarPanelController.swift` — AppKit panel creation, positioning, focus, resize, dismissal.
-- `NotchBrain/UI/SidebarView.swift` — compact/expanded chat shell and navigation.
-- `NotchBrain/UI/ChatView.swift` — messages, streaming state, composer, actions.
-- `NotchBrain/UI/SourceCitationView.swift` — source chips/cards and open-source actions.
-- `NotchBrain/UI/MemoryView.swift` — inspect, edit, delete, export memories.
-- `NotchBrain/System/GlobalShortcutManager.swift` — global shortcut registration.
-- `NotchBrain/System/AppContextManager.swift` — clipboard, selected text, active app/window, permissions.
-- `NotchBrain/System/PermissionManager.swift` — explain and track Accessibility/filesystem permissions.
-- `NotchBrain/Inference/InferenceProvider.swift` — provider-neutral streaming protocol and model status types.
-- `NotchBrain/Inference/OllamaProvider.swift` — Ollama health checks, model downloads, embeddings, streaming chat.
-- `NotchBrain/Indexing/IndexCoordinator.swift` — source registration, scheduling, incremental indexing, stale pruning.
-- `NotchBrain/Indexing/SourceConnectors.swift` — files, Markdown, plain text, PDF, Git connectors.
-- `NotchBrain/Indexing/Chunker.swift` — deterministic text chunking with source offsets.
-- `NotchBrain/Retrieval/HybridSearch.swift` — FTS5/vector/graph retrieval, scoring, reranking.
-- `NotchBrain/Retrieval/ContextAssembler.swift` — token-bounded evidence context and citation mapping.
-- `NotchBrain/Graph/KnowledgeGraph.swift` — entities, aliases, mentions, relationships, provenance.
-- `NotchBrain/Memory/MemoryStore.swift` — explicit durable memories and deletion/export.
-- `NotchBrain/Storage/Database.swift` and `NotchBrain/Storage/Migrations.swift` — SQLite connection, migrations, transactions.
-- `NotchBrain/Storage/Models.swift` — shared persisted model types.
-- `NotchBrain/Privacy/ExclusionRules.swift` — user exclusions and secret/build-folder filters.
-- `NotchBrainTests/` — unit, integration, retrieval, permission, and UI-facing tests.
+- `MacBrain/MacBrainApp.swift` — app entry point and scene lifecycle.
+- `MacBrain/UI/SidebarPanelController.swift` — AppKit panel creation, positioning, focus, resize, dismissal.
+- `MacBrain/UI/SidebarView.swift` — compact/expanded chat shell and navigation.
+- `MacBrain/UI/ChatView.swift` — messages, streaming state, composer, actions.
+- `MacBrain/UI/SourceCitationView.swift` — source chips/cards and open-source actions.
+- `MacBrain/UI/MemoryView.swift` — inspect, edit, delete, export memories.
+- `MacBrain/System/GlobalShortcutManager.swift` — global shortcut registration.
+- `MacBrain/System/AppContextManager.swift` — clipboard, selected text, active app/window, permissions.
+- `MacBrain/System/PermissionManager.swift` — explain and track Accessibility/filesystem permissions.
+- `MacBrain/Inference/InferenceProvider.swift` — provider-neutral streaming protocol and model status types.
+- `MacBrain/Inference/OllamaProvider.swift` — Ollama health checks, model downloads, embeddings, streaming chat.
+- `MacBrain/Indexing/IndexCoordinator.swift` — source registration, scheduling, incremental indexing, stale pruning.
+- `MacBrain/Indexing/SourceConnectors.swift` — files, Markdown, plain text, PDF, Git connectors.
+- `MacBrain/Indexing/Chunker.swift` — deterministic text chunking with source offsets.
+- `MacBrain/Retrieval/HybridSearch.swift` — FTS5/vector/graph retrieval, scoring, reranking.
+- `MacBrain/Retrieval/ContextAssembler.swift` — token-bounded evidence context and citation mapping.
+- `MacBrain/Graph/KnowledgeGraph.swift` — entities, aliases, mentions, relationships, provenance.
+- `MacBrain/Memory/MemoryStore.swift` — explicit durable memories and deletion/export.
+- `MacBrain/Storage/Database.swift` and `MacBrain/Storage/Migrations.swift` — SQLite connection, migrations, transactions.
+- `MacBrain/Storage/Models.swift` — shared persisted model types.
+- `MacBrain/Privacy/ExclusionRules.swift` — user exclusions and secret/build-folder filters.
+- `MacBrainTests/` — unit, integration, retrieval, permission, and UI-facing tests.
 - `docs/architecture.md`, `docs/privacy.md`, `docs/model-support.md` — decisions users and maintainers need.
 
 ## Delivery phases

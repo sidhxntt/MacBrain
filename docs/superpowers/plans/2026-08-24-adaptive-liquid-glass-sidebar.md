@@ -13,8 +13,8 @@
 ### Task 1: Add semantic adaptive glass roles
 
 **Files:**
-- Create: `Sources/NotchBrain/Views/AdaptiveGlassRole.swift`
-- Test: `Tests/NotchBrainTests/AdaptiveGlassRoleTests.swift`
+- Create: `Sources/MacBrain/Views/AdaptiveGlassRole.swift`
+- Test: `Tests/MacBrainTests/AdaptiveGlassRoleTests.swift`
 
 - [ ] Add failing tests asserting shell, composer, assistant-message, user-message, and prominent-action roles expose stable fallback material strength, tint intent, outline opacity, and shadow configuration.
 - [ ] Run `swift test --disable-sandbox --filter AdaptiveGlassRoleTests`; expect compilation failure because `AdaptiveGlassRole` does not exist.
@@ -24,7 +24,7 @@
 ### Task 2: Add availability-gated rendering modifier
 
 **Files:**
-- Create: `Sources/NotchBrain/Views/AdaptiveGlassModifier.swift`
+- Create: `Sources/MacBrain/Views/AdaptiveGlassModifier.swift`
 
 - [ ] Implement a generic `View.adaptiveGlass(role:in:)` modifier.
 - [ ] Inside `if #available(macOS 26.0, *)`, map roles to native `glassEffect` styles and use `.interactive()` only for composer and prominent-action roles.
@@ -35,10 +35,10 @@
 ### Task 3: Convert complete sidebar hierarchy
 
 **Files:**
-- Modify: `Sources/NotchBrain/Views/SidebarView.swift`
-- Modify: `Sources/NotchBrain/Views/ChatComposer.swift`
-- Modify: `Sources/NotchBrain/Views/ChatConversationView.swift`
-- Modify: `Sources/NotchBrain/Views/ChatMessageBubble.swift`
+- Modify: `Sources/MacBrain/Views/SidebarView.swift`
+- Modify: `Sources/MacBrain/Views/ChatComposer.swift`
+- Modify: `Sources/MacBrain/Views/ChatConversationView.swift`
+- Modify: `Sources/MacBrain/Views/ChatMessageBubble.swift`
 
 - [ ] Replace shell purple/black overlays with `.adaptiveGlass(role: .shell, in: sidebarShape)`.
 - [ ] Apply `.composer` glass to the compact composer and `.prominentAction` glass to the send button while preserving Return submission and exact two-row layout.
@@ -49,12 +49,12 @@
 ### Task 4: Verify both compatibility paths
 
 **Files:**
-- Test: `Tests/NotchBrainTests/AdaptiveGlassRoleTests.swift`
+- Test: `Tests/MacBrainTests/AdaptiveGlassRoleTests.swift`
 - Verify: `Package.swift`
 - Verify: `script/build_and_run.sh`
 
 - [ ] Confirm `Package.swift` still declares `.macOS(.v14)`.
 - [ ] Run full tests using project-local cache paths; expect zero failures.
-- [ ] Run `bash ./script/build_and_run.sh --bundle`; expect a fresh `dist/NotchBrain.app`.
+- [ ] Run `bash ./script/build_and_run.sh --bundle`; expect a fresh `dist/MacBrain.app`.
 - [ ] Launch the `.app` bundle and verify the current runtime path renders transparent adaptive surfaces with readable controls and unchanged panel behavior.
 - [ ] Search sources for removed hard-coded shell overlays, duplicated sidebar hierarchies, Cloud/network calls, and third-party UI dependencies; expect none.

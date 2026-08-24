@@ -7,7 +7,7 @@ final class SidebarGeometryTests: XCTestCase {
         let visible = CGRect(x: 0, y: 25, width: 1440, height: 875)
         let frame = SidebarGeometry.frame(in: visible, requestedWidth: 420, edge: .right)
 
-        XCTAssertEqual(frame.maxX, visible.maxX - SidebarGeometry.edgeInset)
+        XCTAssertEqual(frame.maxX, visible.maxX - SidebarGeometry.rightEdgeInset)
         XCTAssertEqual(frame.minY, visible.minY + SidebarGeometry.edgeInset)
         XCTAssertEqual(frame.height, visible.height - SidebarGeometry.edgeInset * 2)
     }

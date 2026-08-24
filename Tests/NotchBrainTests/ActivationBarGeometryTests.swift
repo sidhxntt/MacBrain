@@ -3,7 +3,7 @@ import XCTest
 
 final class ActivationBarGeometryTests: XCTestCase {
     func testVerticalHandleUsesCompactDimensions() {
-        XCTAssertEqual(ActivationBarGeometry.size, CGSize(width: 12, height: 72))
+        XCTAssertEqual(ActivationBarGeometry.size, CGSize(width: 9, height: 58))
     }
 
     func testVerticalHandleIsPinnedToTheRightEdge() {

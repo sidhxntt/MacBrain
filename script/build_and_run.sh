@@ -11,6 +11,7 @@ DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
+APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 CLANG_CACHE_DIR="/tmp/notchbrain-clang-cache"
@@ -25,8 +26,11 @@ BUILD_BINARY="$(env CLANG_MODULE_CACHE_PATH="$CLANG_CACHE_DIR" SWIFTPM_CACHE_PAT
 
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS"
+mkdir -p "$APP_RESOURCES"
 cp "$BUILD_BINARY" "$APP_BINARY"
 chmod +x "$APP_BINARY"
+cp "$ROOT_DIR/top.svg" "$APP_RESOURCES/top.svg"
+cp "$ROOT_DIR/center.svg" "$APP_RESOURCES/center.svg"
 
 cat >"$INFO_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -35,8 +39,9 @@ cat >"$INFO_PLIST" <<PLIST
 <dict>
   <key>CFBundleExecutable</key><string>$APP_NAME</string>
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
-  <key>CFBundleName</key><string>Notch Brain</string>
+  <key>CFBundleName</key><string>MacBrain</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>LSUIElement</key><true/>
   <key>LSMinimumSystemVersion</key><string>$MIN_SYSTEM_VERSION</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict>

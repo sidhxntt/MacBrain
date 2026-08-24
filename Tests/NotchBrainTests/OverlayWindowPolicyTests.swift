@@ -10,9 +10,14 @@ final class OverlayWindowPolicyTests: XCTestCase {
         XCTAssertTrue(behavior.contains(.canJoinAllSpaces))
         XCTAssertTrue(behavior.contains(.fullScreenAuxiliary))
         XCTAssertFalse(behavior.contains(.moveToActiveSpace))
-        XCTAssertTrue(style.contains(.nonactivatingPanel))
+        XCTAssertFalse(style.contains(.nonactivatingPanel))
         XCTAssertTrue(style.contains(.resizable))
         XCTAssertEqual(OverlayWindowPolicy.level, .statusBar)
+        XCTAssertEqual(
+            OverlayWindowPolicy.clickShieldLevel.rawValue,
+            OverlayWindowPolicy.level.rawValue - 1
+        )
+        XCTAssertFalse(OverlayWindowPolicy.clickShieldStyleMask.contains(.nonactivatingPanel))
     }
 
     func testActivationBarPolicyJoinsEverySpaceWithoutMovingAway() {
@@ -21,5 +26,9 @@ final class OverlayWindowPolicyTests: XCTestCase {
         XCTAssertTrue(behavior.contains(.canJoinAllSpaces))
         XCTAssertTrue(behavior.contains(.fullScreenAuxiliary))
         XCTAssertFalse(behavior.contains(.moveToActiveSpace))
+    }
+
+    func testOverlayAppUsesAccessoryActivationPolicy() {
+        XCTAssertEqual(OverlayWindowPolicy.applicationActivationPolicy, .accessory)
     }
 }

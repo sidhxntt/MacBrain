@@ -4,6 +4,8 @@ final class ActivationBarHandleView: NSVisualEffectView {
     private let onActivate: () -> Void
     private let onDrag: (CGFloat) -> Void
     private let onDragEnd: () -> Void
+    private let hoverGlowLayer = CAShapeLayer()
+    private var hoverTrackingArea: NSTrackingArea?
 
     init(
         onActivate: @escaping () -> Void,
@@ -25,6 +27,15 @@ final class ActivationBarHandleView: NSVisualEffectView {
         layer?.shadowRadius = 8
         layer?.shadowOffset = CGSize(width: 0, height: -3)
         layer?.shadowOpacity = 1
+
+        hoverGlowLayer.fillColor = NSColor.clear.cgColor
+        hoverGlowLayer.strokeColor = NSColor.controlAccentColor.withAlphaComponent(0.90).cgColor
+        hoverGlowLayer.lineWidth = 1.25
+        hoverGlowLayer.shadowColor = NSColor.controlAccentColor.cgColor
+        hoverGlowLayer.shadowRadius = 5
+        hoverGlowLayer.shadowOpacity = 0
+        hoverGlowLayer.opacity = 0
+        layer?.addSublayer(hoverGlowLayer)
     }
 
     required init?(coder: NSCoder) {
@@ -33,6 +44,43 @@ final class ActivationBarHandleView: NSVisualEffectView {
 
     override var intrinsicContentSize: NSSize {
         NSSize(width: ActivationBarGeometry.size.width, height: ActivationBarGeometry.size.height)
+    }
+
+    override func layout() {
+        super.layout()
+        hoverGlowLayer.frame = bounds
+        let outlineRect = bounds.insetBy(dx: 1, dy: 1)
+        hoverGlowLayer.path = CGPath(
+            roundedRect: outlineRect,
+            cornerWidth: outlineRect.width / 2,
+            cornerHeight: outlineRect.width / 2,
+            transform: nil
+        )
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+
+        if let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+        }
+
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        hoverTrackingArea = trackingArea
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        setHoverGlowVisible(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        setHoverGlowVisible(false)
     }
 
     override func resetCursorRects() {
@@ -64,5 +112,29 @@ final class ActivationBarHandleView: NSVisualEffectView {
                 continue
             }
         }
+    }
+
+    private func setHoverGlowVisible(_ isVisible: Bool) {
+        hoverGlowLayer.removeAllAnimations()
+
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.18)
+        hoverGlowLayer.opacity = isVisible ? 1 : 0
+        hoverGlowLayer.shadowOpacity = isVisible ? 0.85 : 0
+        layer?.borderColor = NSColor.white
+            .withAlphaComponent(isVisible ? 0.70 : 0.30)
+            .cgColor
+        CATransaction.commit()
+
+        guard isVisible else { return }
+
+        let pulse = CABasicAnimation(keyPath: #keyPath(CALayer.shadowOpacity))
+        pulse.fromValue = 0.35
+        pulse.toValue = 0.95
+        pulse.duration = 0.9
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        hoverGlowLayer.add(pulse, forKey: "hoverGlowPulse")
     }
 }

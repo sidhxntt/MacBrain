@@ -5,6 +5,7 @@ struct SidebarGeometry: Equatable, Sendable {
     static let maximumWidth: CGFloat = 720
     static let minimumHeight: CGFloat = 320
     static let edgeInset: CGFloat = 8
+    static let rightEdgeInset: CGFloat = 0
 
     static func frame(
         in visibleFrame: CGRect,
@@ -20,7 +21,7 @@ struct SidebarGeometry: Equatable, Sendable {
         case .left:
             originX = visibleFrame.minX + edgeInset
         case .right:
-            originX = visibleFrame.maxX - width - edgeInset
+            originX = visibleFrame.maxX - width - rightEdgeInset
         }
 
         return CGRect(

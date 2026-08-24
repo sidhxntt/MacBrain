@@ -4,11 +4,15 @@ import os
 
 @MainActor
 final class SidebarPanelController: NSObject, NSWindowDelegate {
+    private let transitionDuration: TimeInterval = 0.24
     private let logger = Logger(subsystem: "com.notchbrain.app", category: "sidebar")
     private let screenProvider: any ScreenProviding
+    private let chatStore = ChatStore()
     nonisolated(unsafe) private var displayObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var appDeactivationObserver: NSObjectProtocol?
 
     private(set) var panel: SidebarPanel?
+    private var clickShield: ClickShieldPanel?
     private(set) var presentation: SidebarPresentation = .compact
     var onHide: (() -> Void)?
 
@@ -21,31 +25,83 @@ final class SidebarPanelController: NSObject, NSWindowDelegate {
         if let displayObserver {
             NotificationCenter.default.removeObserver(displayObserver)
         }
+        if let appDeactivationObserver {
+            NotificationCenter.default.removeObserver(appDeactivationObserver)
+        }
     }
 
     func show() {
         let panel = makePanelIfNeeded()
-        reposition(panel, preservingCurrentWidth: true)
-        panel.orderFrontRegardless()
-        panel.makeKey()
+        guard let screen = screenProvider.targetScreen(for: panel) else {
+            logger.error("Cannot show sidebar because no display is available")
+            return
+        }
+
+        if panel.isVisible {
+            showClickShield(on: screen)
+            bringToFrontAndFocus(panel)
+            return
+        }
+
+        let currentWidth = panel.frame.width > 0 ? panel.frame.width : presentation.preferredWidth
+        let targetFrame = SidebarGeometry.frame(
+            in: screen.visibleFrame,
+            requestedWidth: currentWidth,
+            edge: .right
+        )
+        panel.contentView = SidebarHostingView(rootView: makeSidebarView())
+        panel.setFrame(targetFrame.offsetBy(dx: targetFrame.width, dy: 0), display: false)
+        showClickShield(on: screen)
+        bringToFrontAndFocus(panel)
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = transitionDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrame(targetFrame, display: true)
+        }
         logger.info("Sidebar shown")
     }
 
     func hide(notify: Bool = true) {
-        panel?.orderOut(nil)
+        guard let panel, panel.isVisible else {
+            hideClickShield()
+            if notify { onHide?() }
+            return
+        }
+
+        guard notify else {
+            panel.orderOut(nil)
+            hideClickShield()
+            logger.info("Sidebar hidden")
+            return
+        }
+
+        let exitFrame = panel.frame.offsetBy(dx: panel.frame.width, dy: 0)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = transitionDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().setFrame(exitFrame, display: true)
+        } completionHandler: { [weak self, weak panel] in
+            Task { @MainActor [weak self, weak panel] in
+                panel?.orderOut(nil)
+                self?.hideClickShield()
+                self?.onHide?()
+            }
+        }
         logger.info("Sidebar hidden")
-        if notify { onHide?() }
     }
 
     func dismiss() {
         panel?.close()
+        hideClickShield()
         logger.info("Sidebar dismissed")
     }
 
     func focus() {
         show()
-        panel?.orderFrontRegardless()
-        panel?.makeKey()
+        if let panel {
+            bringToFrontAndFocus(panel)
+        }
         logger.info("Sidebar focused")
     }
 
@@ -78,7 +134,7 @@ final class SidebarPanelController: NSObject, NSWindowDelegate {
         panel.hasShadow = false
         panel.minSize = NSSize(width: SidebarGeometry.minimumWidth, height: SidebarGeometry.minimumHeight)
         panel.maxSize = NSSize(width: SidebarGeometry.maximumWidth, height: 10_000)
-        panel.contentView = NSHostingView(rootView: makeSidebarView())
+        panel.contentView = SidebarHostingView(rootView: makeSidebarView())
         self.panel = panel
 
         displayObserver = NotificationCenter.default.addObserver(
@@ -89,15 +145,65 @@ final class SidebarPanelController: NSObject, NSWindowDelegate {
             Task { @MainActor [weak self] in self?.displayParametersChanged() }
         }
 
+        appDeactivationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: NSApp,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.hide() }
+        }
+
         return panel
+    }
+
+    private func makeClickShieldIfNeeded() -> ClickShieldPanel {
+        if let clickShield { return clickShield }
+
+        let shield = ClickShieldPanel(
+            contentRect: .zero,
+            styleMask: OverlayWindowPolicy.clickShieldStyleMask,
+            backing: .buffered,
+            defer: false
+        )
+        shield.level = OverlayWindowPolicy.clickShieldLevel
+        shield.isFloatingPanel = true
+        shield.isOpaque = false
+        shield.backgroundColor = .clear
+        shield.hidesOnDeactivate = false
+        shield.collectionBehavior = OverlayWindowPolicy.sidebarCollectionBehavior
+        shield.hasShadow = false
+        let shieldView = ClickShieldView { [weak self] in
+            self?.hide()
+        }
+        shieldView.wantsLayer = true
+        shieldView.layer?.backgroundColor = NSColor.clear.cgColor
+        shield.contentView = shieldView
+        clickShield = shield
+        return shield
+    }
+
+    private func showClickShield(on screen: NSScreen) {
+        let shield = makeClickShieldIfNeeded()
+        shield.setFrame(screen.frame, display: false)
+        shield.orderFrontRegardless()
+    }
+
+    private func hideClickShield() {
+        clickShield?.orderOut(nil)
     }
 
     private func makeSidebarView() -> SidebarView {
         SidebarView(
             presentation: presentation,
-            onTogglePresentation: { [weak self] in self?.togglePresentation() },
-            onClose: { [weak self] in self?.hide() }
+            chatStore: chatStore,
+            onTogglePresentation: { [weak self] in self?.togglePresentation() }
         )
+    }
+
+    private func bringToFrontAndFocus(_ panel: SidebarPanel) {
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()
     }
 
     private func reposition(
@@ -113,8 +219,9 @@ final class SidebarPanelController: NSObject, NSWindowDelegate {
         let currentWidth = panel.frame.width > 0 ? panel.frame.width : presentation.preferredWidth
         let width = requestedWidth ?? (preservingCurrentWidth ? currentWidth : presentation.preferredWidth)
         let frame = SidebarGeometry.frame(in: screen.visibleFrame, requestedWidth: width, edge: .right)
+        showClickShield(on: screen)
         panel.setFrame(frame, display: true, animate: panel.isVisible)
-        panel.contentView = NSHostingView(rootView: makeSidebarView())
+        panel.contentView = SidebarHostingView(rootView: makeSidebarView())
         logger.debug("Sidebar positioned on display")
     }
 
@@ -134,6 +241,7 @@ final class SidebarPanelController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         panel = nil
+        hideClickShield()
         onHide?()
         logger.info("Sidebar window closed")
     }

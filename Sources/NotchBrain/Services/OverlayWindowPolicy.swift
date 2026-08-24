@@ -1,11 +1,17 @@
 import AppKit
 
 enum OverlayWindowPolicy {
+    static let applicationActivationPolicy: NSApplication.ActivationPolicy = .accessory
     static let level: NSWindow.Level = .statusBar
+    static let clickShieldLevel = NSWindow.Level(rawValue: level.rawValue - 1)
     static let sidebarStyleMask: NSWindow.StyleMask = [
         .borderless,
-        .nonactivatingPanel,
         .resizable,
+        .fullSizeContentView
+    ]
+
+    static let clickShieldStyleMask: NSWindow.StyleMask = [
+        .borderless,
         .fullSizeContentView
     ]
 

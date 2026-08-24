@@ -1,7 +1,7 @@
 import Foundation
 
 struct ActivationBarGeometry: Equatable, Sendable {
-    static let size = CGSize(width: 12, height: 72)
+    static let size = CGSize(width: 9, height: 58)
     static let edgeInset: CGFloat = 18
 
     static func frame(in visibleFrame: CGRect, centerY: CGFloat? = nil) -> CGRect {

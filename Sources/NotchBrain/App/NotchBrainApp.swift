@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var coordinator: AppCoordinator?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
+        NSApp.setActivationPolicy(OverlayWindowPolicy.applicationActivationPolicy)
         let coordinator = AppCoordinator()
         self.coordinator = coordinator
         coordinator.start()

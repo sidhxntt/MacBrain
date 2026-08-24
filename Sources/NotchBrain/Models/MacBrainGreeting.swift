@@ -1,0 +1,60 @@
+import Foundation
+
+enum MacBrainGreeting {
+    static let all = [
+        "Good to see you.",
+        "What are we working on?",
+        "Ready when you are.",
+        "Your workspace is in focus.",
+        "Let’s make progress.",
+        "What can I help you remember?",
+        "Pick up where you left off.",
+        "Your notes are close at hand.",
+        "Ready to think alongside you.",
+        "Let’s untangle the next task.",
+        "What needs your attention?",
+        "Here for the next idea.",
+        "Let’s turn context into momentum.",
+        "Your work, within reach.",
+        "Ready to explore your files.",
+        "What should we connect today?",
+        "A fresh chat, a clear start.",
+        "Let’s find the signal.",
+        "Your local context is ready.",
+        "Where should we begin?",
+        "Ready to help you move forward.",
+        "Let’s keep the thread going.",
+        "What are you building today?",
+        "Your work memory is standing by.",
+        "Let’s make the next step easier.",
+        "Ready for a focused session.",
+        "What would you like to recall?",
+        "Let’s make sense of the details.",
+        "Your ideas have a home here.",
+        "Ready to dive in.",
+        "Let’s connect the dots.",
+        "What can MacBrain help with?",
+        "Your context is ready to use.",
+        "Let’s keep things moving.",
+        "Start anywhere.",
+        "Ready to surface what matters.",
+        "Let’s work through it together.",
+        "Your next answer may already be here.",
+        "What are we solving?",
+        "Let’s bring the right context forward.",
+        "Ready to revisit your work.",
+        "A quiet space for big ideas.",
+        "Let’s make today clearer.",
+        "Your local assistant is ready.",
+        "What should we look into?",
+        "Let’s turn notes into answers.",
+        "Ready for your next question.",
+        "Your workspace remembers.",
+        "Let’s find your way back in.",
+        "What’s on your mind?"
+    ]
+
+    static func random() -> String {
+        all.randomElement() ?? "Ready when you are."
+    }
+}

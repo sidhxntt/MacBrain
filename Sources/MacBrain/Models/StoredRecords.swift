@@ -114,15 +114,17 @@ struct StoredConversation: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     var title: String
     var greeting: String
+    var modelIdentifier: String
     var createdAt: Date
     var updatedAt: Date
     var isArchived: Bool
     var isPinned: Bool
 
-    init(id: UUID = UUID(), title: String, greeting: String, createdAt: Date = .now, updatedAt: Date = .now, isArchived: Bool = false, isPinned: Bool = false) {
+    init(id: UUID = UUID(), title: String, greeting: String, modelIdentifier: String = "local", createdAt: Date = .now, updatedAt: Date = .now, isArchived: Bool = false, isPinned: Bool = false) {
         self.id = id
         self.title = title
         self.greeting = greeting
+        self.modelIdentifier = modelIdentifier
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.isArchived = isArchived

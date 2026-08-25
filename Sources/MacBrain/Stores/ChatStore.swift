@@ -133,6 +133,14 @@ final class ChatStore: ObservableObject {
         synchronizeCurrentSession()
     }
 
+    func retryLastResponse() {
+        guard !isSending, let userIndex = messages.lastIndex(where: { $0.role == .user }) else { return }
+        messages.removeSubrange((userIndex + 1)..<messages.count)
+        draft = messages[userIndex].text
+        synchronizeCurrentSession()
+        startSendingDraft()
+    }
+
     func startNewChat() {
         synchronizeCurrentSession()
         let newSession = ChatSession(messages: [], greeting: greetingProvider())
@@ -257,6 +265,7 @@ final class ChatStore: ObservableObject {
             title: title,
             messages: session.messages,
             greeting: session.greeting,
+            modelIdentifier: session.modelIdentifier,
             updatedAt: .now
         )
         openSessions[index] = updatedSession
@@ -299,7 +308,8 @@ final class ChatStore: ObservableObject {
             id: activeSessionID,
             title: currentTitle,
             messages: messages,
-            greeting: welcomeGreeting
+            greeting: welcomeGreeting,
+            modelIdentifier: openSessions[index].modelIdentifier
         )
         persistSessions(debounced: !persisting)
     }

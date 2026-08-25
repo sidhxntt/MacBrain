@@ -87,6 +87,10 @@ struct OllamaClient: Sendable {
         }
     }
 
+    func unload(model: String) async throws {
+        _ = try await request(path: "/api/chat", method: "POST", body: OllamaUnloadRequest(model: model))
+    }
+
     private func stream<Element: Sendable, Body: Encodable & Sendable>(
         path: String,
         body: Body,
@@ -355,6 +359,18 @@ private struct OllamaChatEvent: Decodable {
 private struct OllamaPullRequest: Encodable {
     let name: String
     let stream: Bool
+}
+
+private struct OllamaUnloadRequest: Encodable {
+    let model: String
+    let messages: [InferenceChatMessage] = []
+    let keepAlive = "0"
+    let stream = false
+
+    enum CodingKeys: String, CodingKey {
+        case model, messages, stream
+        case keepAlive = "keep_alive"
+    }
 }
 
 private struct OllamaPullEvent: Decodable {

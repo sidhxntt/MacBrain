@@ -3,6 +3,7 @@ import SwiftUI
 struct ChatComposer: View {
     @ObservedObject var store: ChatStore
     let onClear: () -> Void
+    let safeguards: ContextSafeguards?
     let onManageSources: () -> Void
     @FocusState private var isFocused: Bool
 
@@ -34,6 +35,16 @@ struct ChatComposer: View {
                     .buttonStyle(.borderless)
                     .font(.title3)
                     .help("Add or manage local sources")
+
+                    Menu("Add live context", systemImage: "paperclip") {
+                        Button("Selected text") { safeguards?.captureSelectedText() }
+                        Button("Clipboard") { safeguards?.captureClipboard() }
+                        Button("Active app") { safeguards?.captureActiveApplication() }
+                        Button("Git repository") { safeguards?.captureRepository() }
+                    }
+                    .labelStyle(.iconOnly)
+                    .menuStyle(.borderlessButton)
+                    .help("Choose local context to include in the next request")
 
                     Spacer()
 

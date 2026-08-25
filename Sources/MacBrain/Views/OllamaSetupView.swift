@@ -111,6 +111,16 @@ struct OllamaSetupView: View {
             Picker("Embedding model", selection: $store.selectedEmbeddingModel) {
                 ForEach(store.availableEmbeddingModels) { model in Text(model.name).tag(model.name) }
             }
+            if let warning = store.selectedModelMemoryWarning {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            Button("Unload idle chat model") {
+                Task { await store.unloadIdleChatModel() }
+            }
+            .font(.caption)
+            .help("Release the local model when your Ollama provider supports unloading")
         }
         .controlSize(.small)
     }

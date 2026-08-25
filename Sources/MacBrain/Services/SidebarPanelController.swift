@@ -9,6 +9,7 @@ final class SidebarPanelController: NSObject, NSWindowDelegate {
     private let screenProvider: any ScreenProviding
     private let sourceLibrary: SourceLibraryStore
     let chatStore: ChatStore
+    private let contextSafeguards: ContextSafeguards
     nonisolated(unsafe) private var displayObserver: NSObjectProtocol?
     nonisolated(unsafe) private var appDeactivationObserver: NSObjectProtocol?
 
@@ -20,13 +21,15 @@ final class SidebarPanelController: NSObject, NSWindowDelegate {
     init(
         screenProvider: any ScreenProviding = SystemScreenProvider(),
         sourceLibrary: SourceLibraryStore = SourceLibraryStore(),
-        chatStore: ChatStore? = nil
+        chatStore: ChatStore? = nil,
+        contextSafeguards: ContextSafeguards = ContextSafeguards()
     ) {
         self.screenProvider = screenProvider
         self.sourceLibrary = sourceLibrary
         self.chatStore = chatStore ?? ChatStore(
             responder: LocalKnowledgeResponder(repository: sourceLibrary.repository)
         )
+        self.contextSafeguards = contextSafeguards
         super.init()
     }
 
@@ -206,6 +209,7 @@ final class SidebarPanelController: NSObject, NSWindowDelegate {
             presentation: presentation,
             chatStore: chatStore,
             sourceLibrary: sourceLibrary,
+            contextSafeguards: contextSafeguards,
             onTogglePresentation: { [weak self] in self?.togglePresentation() }
         )
     }

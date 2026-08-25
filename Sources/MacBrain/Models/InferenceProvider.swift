@@ -51,4 +51,10 @@ protocol InferenceProvider: Sendable {
     func streamChat(model: String, messages: [InferenceChatMessage]) -> AsyncThrowingStream<String, Error>
     func embeddings(model: String, input: [String]) async throws -> [InferenceEmbedding]
     func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, Error>
+    func unload(model: String) async
+}
+
+extension InferenceProvider {
+    /// Providers that cannot explicitly unload retain their existing lifecycle behavior.
+    func unload(model: String) async {}
 }

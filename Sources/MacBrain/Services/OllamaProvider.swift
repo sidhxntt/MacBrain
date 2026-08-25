@@ -34,4 +34,8 @@ struct OllamaProvider: InferenceProvider {
     func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, Error> {
         client.pull(model: model)
     }
+
+    func unload(model: String) async {
+        try? await client.unload(model: model)
+    }
 }

@@ -17,6 +17,7 @@ final class ChatStore: ObservableObject {
     private let greetingProvider: () -> String
     private let sessionRepository: (any ChatSessionPersisting)?
     private let responseTimeout: Duration
+    private let contextSafeguards: ContextSafeguards?
     private var sendingTask: Task<Void, Never>?
     private var sendingTaskID: UUID?
     private var activeResponseID: UUID?
@@ -30,6 +31,7 @@ final class ChatStore: ObservableObject {
         responder: any ChatResponder = LocalMockChatResponder(),
         greetingProvider: @escaping () -> String = { MacBrainGreeting.random() },
         sessionRepository: (any ChatSessionPersisting)? = nil,
+        contextSafeguards: ContextSafeguards? = nil,
         responseTimeout: Duration = .seconds(45)
     ) {
         let initialGreeting = greetingProvider()
@@ -38,6 +40,7 @@ final class ChatStore: ObservableObject {
         self.greetingProvider = greetingProvider
         self.sessionRepository = sessionRepository
         self.responseTimeout = responseTimeout
+        self.contextSafeguards = contextSafeguards
         self.openSessions = [initialSession]
         self.activeSessionID = initialSession.id
         self.welcomeGreeting = initialGreeting
@@ -54,12 +57,15 @@ final class ChatStore: ObservableObject {
             currentTitle = ChatTitleGenerator.title(for: prompt)
         }
         let conversation = messages
+        let context = contextSafeguards?.promptContext(for: prompt) ?? ""
+        let requestPrompt = context.isEmpty ? prompt : "\(prompt)\n\n[User opted-in local context — use only when relevant]\n\(context)"
         messages.append(ChatMessage(role: .user, text: prompt))
         synchronizeCurrentSession()
         let responseID = UUID()
         activeResponseID = responseID
         activeAssistantMessageID = nil
         isSending = true
+        contextSafeguards?.consumeOneTurnAttachments()
         armResponseWatchdog(for: responseID)
         defer {
             finishResponseIfActive(responseID)
@@ -68,7 +74,7 @@ final class ChatStore: ObservableObject {
         var streamedText = ""
         var streamedMessageID: UUID?
         do {
-            for try await token in responder.stream(to: prompt, conversation: conversation) {
+            for try await token in responder.stream(to: requestPrompt, conversation: conversation) {
                 guard activeResponseID == responseID else { return }
                 try Task.checkCancellation()
                 streamedText.append(token)

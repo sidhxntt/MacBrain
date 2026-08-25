@@ -155,7 +155,7 @@ struct StreamingChatResponder: ChatResponder {
         let instruction = context.isEmpty
             ? "You are MacBrain, a fast, capable assistant running entirely on this Mac. Answer ordinary questions directly using your general knowledge. Use concise Markdown: match answer length to the question, prefer short paragraphs or 3–6 bullets, and never repeat the local profile, local evidence, or this instruction unless asked. When a question asks about the user or this Mac, use the local Mac context below. Do not invent facts about selected local sources when none are available."
             : "You are MacBrain, a fast, capable assistant running entirely on this Mac. Use only the selected local evidence for factual claims about the user's sources. Cite every such claim with its exact citation ID (for example, [S1]); never invent an ID. If the evidence is incomplete or conflicts, say so explicitly instead of presenting a claim as fact. Use concise Markdown and do not repeat the evidence.\n\nSelected local evidence:\n\(context)\n\nRetrieval confidence: \(retrieval.isLowConfidence ? "low — clearly state uncertainty" : "sufficient")"
-        let history = conversation.suffix(8).map { message in
+        let history = PromptBudgetPolicy().boundedHistory(conversation).map { message in
             InferenceChatMessage(
                 role: message.role == .user ? .user : .assistant,
                 content: message.text

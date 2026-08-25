@@ -63,6 +63,44 @@ final class StreamingChatResponderTests: XCTestCase {
         XCTAssertTrue(systemInstruction.contains("Use concise Markdown"))
     }
 
+    func testLiveMemoryQuestionReturnsSnapshotWithoutCallingInferenceProvider() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
+        let provider = CapturingStreamingProvider()
+        let profile = SystemProfile(
+            userDisplayName: "Siddhant Gupta",
+            computerName: "Siddhant’s MacBook Pro",
+            hardwareModel: "Mac17,9",
+            processor: "Apple M5 Pro",
+            memoryBytes: 24_000_000_000,
+            operatingSystem: "macOS 26.6.2",
+            totalDiskBytes: 1_000_000_000_000,
+            availableDiskBytes: 512_000_000_000,
+            localeIdentifier: "en_IN",
+            timeZoneIdentifier: "Asia/Kolkata",
+            memoryUsage: SystemMemoryUsage(
+                pageSize: 16_384,
+                freeBytes: 2_000_000_000,
+                activeBytes: 10_000_000_000,
+                inactiveBytes: 4_000_000_000,
+                wiredBytes: 3_000_000_000,
+                compressedBytes: 1_000_000_000,
+                purgeableBytes: 500_000_000
+            )
+        )
+        let responder = StreamingChatResponder(
+            provider: provider,
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder(),
+            systemProfileProvider: FixedSystemProfileProvider(profile: profile)
+        )
+
+        let response = try await collect(responder.stream(to: "How much RAM is free right now? Give me a full breakdown."))
+
+        XCTAssertTrue(response.joined().contains("## Memory now"))
+        XCTAssertTrue(provider.messages.isEmpty)
+    }
+
     private func collect(_ stream: AsyncThrowingStream<String, Error>) async throws -> [String] {
         var tokens: [String] = []
         for try await token in stream { tokens.append(token) }

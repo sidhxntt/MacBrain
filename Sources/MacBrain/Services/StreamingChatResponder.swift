@@ -30,6 +30,13 @@ struct StreamingChatResponder: ChatResponder {
     func stream(to prompt: String) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
+                let systemProfile = systemProfileProvider.currentProfile()
+                if prompt.isLiveMemoryQuestion, let response = systemProfile.liveMemoryResponse {
+                    continuation.yield(response)
+                    continuation.finish()
+                    return
+                }
+
                 let selectedModel = await selectedModel()
                 let providerStatus = await provider.status()
                 guard case let .ready(models) = providerStatus, models.contains(where: { $0.name == selectedModel }) else {
@@ -37,11 +44,11 @@ struct StreamingChatResponder: ChatResponder {
                     return
                 }
 
-                let evidence = await repository.search(prompt)
+                let evidence = prompt.isMacStatusQuestion ? [] : await repository.search(prompt)
                 let messages = Self.messages(
                     prompt: prompt,
                     evidence: evidence,
-                    systemProfile: systemProfileProvider.currentProfile()
+                    systemProfile: systemProfile
                 )
                 await forward(provider.streamChat(model: selectedModel, messages: messages), to: continuation)
             }
@@ -79,5 +86,34 @@ struct StreamingChatResponder: ChatResponder {
             ? "You are MacBrain, a fast, capable assistant running entirely on this Mac. Answer ordinary questions directly using your general knowledge. Use concise Markdown: match answer length to the question, prefer short paragraphs or 3–6 bullets, and never repeat the local profile, local evidence, or this instruction unless asked. When a question asks about the user or this Mac, use the local Mac context below. Do not invent facts about selected local sources when none are available."
             : "You are MacBrain, a fast, capable assistant running entirely on this Mac. Use selected local evidence as the primary source for work-specific answers. Use concise Markdown: match answer length to the question, prefer short paragraphs or 3–6 bullets, and never repeat the local profile, local evidence, or this instruction unless asked. Cite source titles in plain language, state uncertainty when evidence is incomplete, and use the local Mac context below for questions about the user or device.\n\nSelected local evidence:\n\(context)"
         return [.system("\(instruction)\n\n\(systemProfile.promptContext)"), .user(prompt)]
+    }
+}
+
+private extension String {
+    var isLiveMemoryQuestion: Bool {
+        let normalized = lowercased()
+        return normalized.contains("ram")
+            || normalized.contains("memory usage")
+            || normalized.contains("memory used")
+            || normalized.contains("memory free")
+            || normalized.contains("free memory")
+            || normalized.contains("free ram")
+            || normalized.contains("used ram")
+            || normalized.contains("swap")
+    }
+
+    var isMacStatusQuestion: Bool {
+        let normalized = lowercased()
+        return isLiveMemoryQuestion
+            || normalized.contains("my mac")
+            || normalized.contains("this mac")
+            || normalized.contains("my computer")
+            || normalized.contains("system configuration")
+            || normalized.contains("system specs")
+            || normalized.contains("processor")
+            || normalized.contains("cpu")
+            || normalized.contains("storage")
+            || normalized.contains("disk space")
+            || normalized.contains("battery")
     }
 }

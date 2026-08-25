@@ -5,17 +5,20 @@ struct StreamingChatResponder: ChatResponder {
     let repository: LocalSourceRepository
     let selectedModel: @MainActor @Sendable () -> String
     let fallback: any ChatResponder
+    let systemProfileProvider: any SystemProfileProviding
 
     init(
         provider: any InferenceProvider,
         repository: LocalSourceRepository,
         selectedModel: @escaping @MainActor @Sendable () -> String,
-        fallback: any ChatResponder
+        fallback: any ChatResponder,
+        systemProfileProvider: any SystemProfileProviding = LocalSystemProfileProvider()
     ) {
         self.provider = provider
         self.repository = repository
         self.selectedModel = selectedModel
         self.fallback = fallback
+        self.systemProfileProvider = systemProfileProvider
     }
 
     func respond(to prompt: String) async throws -> String {
@@ -35,7 +38,11 @@ struct StreamingChatResponder: ChatResponder {
                 }
 
                 let evidence = await repository.search(prompt)
-                let messages = Self.messages(prompt: prompt, evidence: evidence)
+                let messages = Self.messages(
+                    prompt: prompt,
+                    evidence: evidence,
+                    systemProfile: systemProfileProvider.currentProfile()
+                )
                 await forward(provider.streamChat(model: selectedModel, messages: messages), to: continuation)
             }
             continuation.onTermination = { _ in task.cancel() }
@@ -59,14 +66,18 @@ struct StreamingChatResponder: ChatResponder {
         }
     }
 
-    private static func messages(prompt: String, evidence: [ConnectorDocument]) -> [InferenceChatMessage] {
+    private static func messages(
+        prompt: String,
+        evidence: [ConnectorDocument],
+        systemProfile: SystemProfile
+    ) -> [InferenceChatMessage] {
         let context = evidence.prefix(4).map { document in
             let excerpt = document.text.replacingOccurrences(of: "\n", with: " ")
             return "[\(document.sourceLabel): \(document.title)] \(String(excerpt.prefix(1_500)))"
         }.joined(separator: "\n\n")
         let instruction = context.isEmpty
-            ? "You are MacBrain, a local assistant. Be clear about uncertainty when no local evidence is available."
-            : "You are MacBrain, a local assistant. Answer only from this local evidence. Cite source titles in plain language and state uncertainty when evidence is incomplete.\n\n\(context)"
-        return [.system(instruction), .user(prompt)]
+            ? "You are MacBrain, a fast, capable assistant running entirely on this Mac. Answer ordinary questions directly using your general knowledge. When a question asks about the user or this Mac, use the local Mac context below. Do not invent facts about selected local sources when none are available."
+            : "You are MacBrain, a fast, capable assistant running entirely on this Mac. Use selected local evidence as the primary source for work-specific answers. Cite source titles in plain language, state uncertainty when evidence is incomplete, and use the local Mac context below for questions about the user or device.\n\nSelected local evidence:\n\(context)"
+        return [.system("\(instruction)\n\n\(systemProfile.promptContext)"), .user(prompt)]
     }
 }

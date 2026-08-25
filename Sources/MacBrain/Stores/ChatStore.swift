@@ -15,13 +15,15 @@ final class ChatStore: ObservableObject {
 
     private let responder: any ChatResponder
     private let greetingProvider: () -> String
-    private let sessionRepository: LocalChatSessionRepository?
+    private let sessionRepository: (any ChatSessionPersisting)?
     private var sendingTask: Task<Void, Never>?
+    private var immediatePersistenceTask: Task<Void, Never>?
+    private var deferredPersistenceTask: Task<Void, Never>?
 
     init(
         responder: any ChatResponder = LocalMockChatResponder(),
         greetingProvider: @escaping () -> String = { MacBrainGreeting.random() },
-        sessionRepository: LocalChatSessionRepository? = nil
+        sessionRepository: (any ChatSessionPersisting)? = nil
     ) {
         let initialGreeting = greetingProvider()
         let initialSession = ChatSession(messages: [], greeting: initialGreeting)
@@ -46,7 +48,10 @@ final class ChatStore: ObservableObject {
         messages.append(ChatMessage(role: .user, text: prompt))
         synchronizeCurrentSession()
         isSending = true
-        defer { isSending = false }
+        defer {
+            isSending = false
+            synchronizeCurrentSession()
+        }
 
         var streamedText = ""
         var streamedMessageID: UUID?
@@ -62,7 +67,7 @@ final class ChatStore: ObservableObject {
                     streamedMessageID = message.id
                     messages.append(message)
                 }
-                synchronizeCurrentSession()
+                synchronizeCurrentSession(persisting: false)
             }
         } catch is CancellationError {
             // Preserve already-streamed text; cancellation is an expected local action.
@@ -77,7 +82,6 @@ final class ChatStore: ObservableObject {
                     )
                 )
             }
-            synchronizeCurrentSession()
         }
     }
 
@@ -230,7 +234,7 @@ final class ChatStore: ObservableObject {
         isSending = false
     }
 
-    private func synchronizeCurrentSession() {
+    private func synchronizeCurrentSession(persisting: Bool = true) {
         guard let index = openSessions.firstIndex(where: { $0.id == activeSessionID }) else { return }
         openSessions[index] = ChatSession(
             id: activeSessionID,
@@ -238,16 +242,49 @@ final class ChatStore: ObservableObject {
             messages: messages,
             greeting: welcomeGreeting
         )
-        persistSessions()
+        persistSessions(debounced: !persisting)
     }
 
-    private func persistSessions() {
+    private func persistSessions(debounced: Bool = false) {
         guard let sessionRepository else { return }
         let open = openSessions
         let archived = archivedSessions
         let pinned = pinnedSessionIDs
-        Task {
-            try? await sessionRepository.replace(open: open, archived: archived, pinnedSessionIDs: pinned)
+
+        if debounced {
+            deferredPersistenceTask?.cancel()
+            deferredPersistenceTask = Task { [weak self] in
+                do {
+                    try await Task.sleep(for: .milliseconds(350))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                self?.enqueueImmediatePersistence(
+                    open: open,
+                    archived: archived,
+                    pinned: pinned,
+                    repository: sessionRepository
+                )
+            }
+            return
+        }
+
+        deferredPersistenceTask?.cancel()
+        deferredPersistenceTask = nil
+        enqueueImmediatePersistence(open: open, archived: archived, pinned: pinned, repository: sessionRepository)
+    }
+
+    private func enqueueImmediatePersistence(
+        open: [ChatSession],
+        archived: [ChatSession],
+        pinned: Set<UUID>,
+        repository: any ChatSessionPersisting
+    ) {
+        let previousTask = immediatePersistenceTask
+        immediatePersistenceTask = Task {
+            await previousTask?.value
+            try? await repository.replace(open: open, archived: archived, pinnedSessionIDs: pinned)
         }
     }
 }

@@ -106,10 +106,10 @@ struct OllamaSetupView: View {
     private var modelSelection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Picker("Chat model", selection: $store.selectedChatModel) {
-                ForEach(store.availableModels) { model in Text(model.name).tag(model.name) }
+                ForEach(store.availableChatModels) { model in Text(model.name).tag(model.name) }
             }
             Picker("Embedding model", selection: $store.selectedEmbeddingModel) {
-                ForEach(store.availableModels) { model in Text(model.name).tag(model.name) }
+                ForEach(store.availableEmbeddingModels) { model in Text(model.name).tag(model.name) }
             }
         }
         .controlSize(.small)

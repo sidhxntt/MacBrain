@@ -27,6 +27,20 @@ final class InferenceStoreTests: XCTestCase {
         XCTAssertEqual(store.selectedEmbeddingModel, "nomic-embed-text")
     }
 
+    func testRefreshReplacesChatModelSavedAsEmbeddingModel() async {
+        let models = [
+            InferenceModel(name: "qwen3:8b", size: 5_000_000_000, parameterSize: "8B", quantization: "Q4_K_M"),
+            InferenceModel(name: "nomic-embed-text", size: 274_000_000, parameterSize: nil, quantization: nil)
+        ]
+        let preferences = transientPreferences()
+        preferences.set("qwen3:8b", forKey: "MacBrain.Ollama.selectedEmbeddingModel")
+        let store = InferenceStore(provider: TestInferenceProvider(statusValue: .ready(models: models)), preferences: preferences)
+
+        await store.refresh()
+
+        XCTAssertEqual(store.selectedEmbeddingModel, "nomic-embed-text")
+    }
+
     func testDownloadUpdatesProgressAndRefreshesInstalledModels() async {
         let provider = TestInferenceProvider(
             statusValue: .ready(models: [.init(name: "qwen3:8b", size: nil, parameterSize: "8B", quantization: "Q4_K_M")]),

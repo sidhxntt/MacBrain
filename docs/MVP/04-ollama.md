@@ -25,9 +25,11 @@ Provide a provider-neutral inference layer and a guided Ollama setup with lightw
 
 ## Runtime behavior
 
-MacBrain calls only the local Ollama API at `http://127.0.0.1:11434`; it has no hosted inference fallback. If Ollama is absent, stopped, or missing a selected model, chat remains usable with the existing local evidence response while Settings explains the recovery step. Installed model choices persist locally in macOS preferences.
+MacBrain calls only the local Ollama API at `http://127.0.0.1:11434`; it has no hosted inference fallback. If Ollama is absent, stopped, or missing a selected model, chat remains usable with the existing local evidence response while Settings explains the recovery step. Installed model choices persist locally in macOS preferences. Chat and embedding selections are role-aware: chat models cannot be selected as embedding models, and invalid older preferences are corrected to a discovered embedding model.
 
-When Ollama is ready, chat responses stream into the conversation as partial tokens. **Stop** cancels the local generation and keeps the useful partial answer. A transient localhost connection failure retries twice; non-transient failures remain visible as actionable diagnostics.
+When Ollama is ready, chat responses stream into the conversation as partial tokens. **Stop** cancels the local generation and keeps the useful partial answer. A transient localhost connection failure retries twice; non-transient failures remain visible as actionable diagnostics. MacBrain requests a 30-minute local model keep-alive, disables hidden reasoning output, uses a focused low-temperature profile, and batches durable chat writes during token streaming to keep responses responsive.
+
+Every chat receives a bounded, local system profile: current account display name, Mac name/model, processor, memory, macOS version, disk capacity, locale, and time zone. This profile lets MacBrain answer questions about the user’s Mac without connecting a source. It excludes serial numbers, credentials, personal files, contacts, messages, app content, and network identifiers.
 
 ## Manual Apple-silicon acceptance
 
@@ -35,7 +37,8 @@ When Ollama is ready, chat responses stream into the conversation as partial tok
 2. In MacBrain Settings, choose **Check local setup**.
 3. Download `qwen3:8b` and `nomic-embed-text` from the Local AI section.
 4. Ask a question; verify partial tokens appear, then test **Stop** during generation.
-5. Quit and reopen MacBrain; verify selected model choices persist and no cloud account or API key is requested.
+5. Ask who is using the Mac and what processor it has; verify the answer comes from the local system profile.
+6. Quit and reopen MacBrain; verify selected model choices persist and no cloud account or API key is requested.
 
 ## Exit criteria
 

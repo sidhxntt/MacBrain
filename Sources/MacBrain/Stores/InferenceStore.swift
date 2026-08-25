@@ -55,6 +55,14 @@ final class InferenceStore: ObservableObject {
 
     var requiredModels: [LocalModelProfile] { [.balancedChat, .lightweightEmbedding] }
 
+    var availableChatModels: [InferenceModel] {
+        availableModels.filter { !Self.isEmbeddingModel($0) }
+    }
+
+    var availableEmbeddingModels: [InferenceModel] {
+        availableModels.filter(Self.isEmbeddingModel)
+    }
+
     var isReadyForLocalChat: Bool {
         guard case let .ready(models) = status else { return false }
         let names = Set(models.map(\.name))
@@ -72,6 +80,7 @@ final class InferenceStore: ObservableObject {
         status = newStatus
         if case let .ready(models) = newStatus {
             availableModels = models
+            normalizeModelSelections()
             lastError = nil
         } else {
             availableModels = []
@@ -113,5 +122,31 @@ final class InferenceStore: ObservableObject {
     private enum Keys {
         static let chatModel = "MacBrain.Ollama.selectedChatModel"
         static let embeddingModel = "MacBrain.Ollama.selectedEmbeddingModel"
+    }
+
+    private func normalizeModelSelections() {
+        let chatModels = availableChatModels
+        let embeddingModels = availableEmbeddingModels
+
+        if !chatModels.contains(where: { $0.name == selectedChatModel }),
+           let replacement = preferredModel(in: chatModels, named: LocalModelProfile.balancedChat.rawValue) {
+            selectedChatModel = replacement.name
+        }
+
+        if !embeddingModels.contains(where: { $0.name == selectedEmbeddingModel }),
+           let replacement = preferredModel(in: embeddingModels, named: LocalModelProfile.lightweightEmbedding.rawValue) {
+            selectedEmbeddingModel = replacement.name
+        }
+    }
+
+    private func preferredModel(in models: [InferenceModel], named preferredName: String) -> InferenceModel? {
+        models.first(where: { $0.name == preferredName }) ?? models.first
+    }
+
+    private static func isEmbeddingModel(_ model: InferenceModel) -> Bool {
+        let name = model.name.lowercased()
+        return ["embed", "embedding", "nomic", "bge", "gte", "e5", "mxbai", "snowflake", "minilm"].contains {
+            name.contains($0)
+        }
     }
 }

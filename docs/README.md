@@ -2,7 +2,7 @@
 
 ## Local AI setup
 
-MacBrain uses Ollama only through `127.0.0.1`. It never needs a hosted AI account or API key. See [Phase 04 — Ollama and Local Model Setup](./MVP/04-ollama.md) for the guided setup and manual acceptance steps.
+MacBrain uses Ollama only through `127.0.0.1`. It never needs a hosted AI account or API key. By default it also knows a bounded local system profile—current account display name, Mac/chip, memory, macOS, disk capacity, locale, and time zone—without indexing personal content. See [Phase 04 — Ollama and Local Model Setup](./MVP/04-ollama.md) for setup, privacy boundaries, and manual acceptance steps.
 
 This is the self-contained source of truth for MacBrain, a native macOS, local-first AI memory and work assistant with a system-wide edge sidebar.
 

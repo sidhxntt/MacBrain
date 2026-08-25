@@ -258,6 +258,41 @@ struct OllamaChatRequest: Encodable {
     let messages: [InferenceChatMessage]
     let stream: Bool
     let think: Bool
+    let keepAlive: String
+    let options: OllamaChatOptions
+
+    init(
+        model: String,
+        messages: [InferenceChatMessage],
+        stream: Bool,
+        think: Bool,
+        keepAlive: String = "30m",
+        options: OllamaChatOptions = .macBrainDefaults
+    ) {
+        self.model = model
+        self.messages = messages
+        self.stream = stream
+        self.think = think
+        self.keepAlive = keepAlive
+        self.options = options
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case model, messages, stream, think, options
+        case keepAlive = "keep_alive"
+    }
+}
+
+struct OllamaChatOptions: Encodable {
+    let temperature: Double
+    let numContext: Int
+
+    static let macBrainDefaults = Self(temperature: 0.2, numContext: 8_192)
+
+    enum CodingKeys: String, CodingKey {
+        case temperature
+        case numContext = "num_ctx"
+    }
 }
 
 private struct OllamaChatEvent: Decodable {

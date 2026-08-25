@@ -66,6 +66,20 @@ final class OllamaClientTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(String(data: payload, encoding: .utf8)).contains("\"think\":false"))
     }
 
+    func testStreamingChatRequestKeepsLocalModelWarmWithDeterministicOptions() throws {
+        let request = OllamaChatRequest(
+            model: "qwen3:8b",
+            messages: [.user("Hi")],
+            stream: true,
+            think: false
+        )
+
+        let payload = try XCTUnwrap(String(data: JSONEncoder().encode(request), encoding: .utf8))
+
+        XCTAssertTrue(payload.contains("\"keep_alive\":\"30m\""))
+        XCTAssertTrue(payload.contains("\"temperature\":0.2"))
+    }
+
     func testServerFailureExposesActionableError() async {
         let client = OllamaClient(baseURL: URL(string: "http://127.0.0.1:11434")!, session: mockSession())
         MockOllamaURLProtocol.handler = { _ in Self.response(status: 500, body: #"{"error":"model missing"}"#) }

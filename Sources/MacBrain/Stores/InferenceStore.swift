@@ -74,6 +74,15 @@ final class InferenceStore: ObservableObject {
         return requiredModels.filter { !names.contains($0.rawValue) }
     }
 
+    /// Conservative warning: model files above 12 GB can leave too little headroom on the MVP 24 GB target.
+    var selectedModelMemoryWarning: String? {
+        guard let model = availableModels.first(where: { $0.name == selectedChatModel }),
+              let size = model.size,
+              size > 12_000_000_000
+        else { return nil }
+        return "This model may exceed safe unified-memory headroom. Close other apps or choose a smaller local model before generating."
+    }
+
     func refresh() async {
         status = .checking
         let newStatus = await provider.status()
@@ -117,6 +126,10 @@ final class InferenceStore: ObservableObject {
         downloadTask?.cancel()
         downloadTask = nil
         download = nil
+    }
+
+    func unloadIdleChatModel() async {
+        await provider.unload(model: selectedChatModel)
     }
 
     private enum Keys {

@@ -4,6 +4,7 @@ struct SidebarView: View {
     let presentation: SidebarPresentation
     @ObservedObject var chatStore: ChatStore
     @ObservedObject var sourceLibrary: SourceLibraryStore
+    @ObservedObject var contextSafeguards: ContextSafeguards
     let onTogglePresentation: () -> Void
     @State private var isSourceManagerPresented = false
 
@@ -44,6 +45,8 @@ struct SidebarView: View {
 
                 ChatConversationView(store: chatStore)
 
+                ContextChipsView(safeguards: contextSafeguards)
+
                 Label("MacBrain stays local to your Mac", systemImage: "lock.fill")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -54,6 +57,7 @@ struct SidebarView: View {
                 ChatComposer(
                     store: chatStore,
                     onClear: chatStore.clear,
+                    safeguards: contextSafeguards,
                     onManageSources: { isSourceManagerPresented = true }
                 )
             }

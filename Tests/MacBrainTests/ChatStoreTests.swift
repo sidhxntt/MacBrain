@@ -27,6 +27,20 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertFalse(store.isSending)
     }
 
+    func testSendingConsumesOneTurnContextWithoutShowingItAsUserMessage() async {
+        let safeguards = ContextSafeguards()
+        safeguards.enable(.clipboard, value: "private clipboard")
+        let responder = RecordingResponder()
+        let store = ChatStore(responder: responder, contextSafeguards: safeguards)
+        store.draft = "Summarize this"
+
+        await store.sendDraft()
+
+        XCTAssertEqual(store.messages.first?.text, "Summarize this")
+        XCTAssertTrue(responder.lastPrompt?.contains("private clipboard") == true)
+        XCTAssertTrue(safeguards.visibleChips.isEmpty)
+    }
+
     func testSecondSendIsIgnoredWhileFirstResponseIsPending() async {
         let started = expectation(description: "First response started")
         let responder = DelayedResponder(onStart: { started.fulfill() })

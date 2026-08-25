@@ -21,6 +21,7 @@ struct MacBrainChatWorkspaceView: View {
             ChatComposer(
                 store: chatStore,
                 onClear: chatStore.clear,
+                safeguards: nil,
                 onManageSources: { isSourceManagerPresented = true }
             )
         }

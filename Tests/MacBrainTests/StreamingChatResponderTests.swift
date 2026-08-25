@@ -101,6 +101,44 @@ final class StreamingChatResponderTests: XCTestCase {
         XCTAssertTrue(provider.messages.isEmpty)
     }
 
+    func testLiveStorageQuestionBypassesSourceSearchAndInference() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
+        let provider = CapturingStreamingProvider()
+        let responder = StreamingChatResponder(
+            provider: provider,
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder(),
+            systemProfileProvider: FixedSystemProfileProvider(profile: liveProfile()),
+            liveContextProvider: FixedLiveMacContextProvider(snapshot: liveSnapshot())
+        )
+
+        let response = try await collect(responder.stream(to: "How much disk space is available right now?"))
+
+        XCTAssertTrue(response.joined().contains("## Storage now"))
+        XCTAssertTrue(provider.messages.isEmpty)
+    }
+
+    private func liveProfile() -> SystemProfile {
+        SystemProfile(
+            userDisplayName: "Siddhant Gupta", computerName: "Siddhant’s MacBook Pro", hardwareModel: "Mac17,9", processor: "Apple M5 Pro", memoryBytes: 24_000_000_000, operatingSystem: "macOS 26.6.2", totalDiskBytes: 1_000_000_000_000, availableDiskBytes: 512_000_000_000, localeIdentifier: "en_IN", timeZoneIdentifier: "Asia/Kolkata"
+        )
+    }
+
+    private func liveSnapshot() -> LiveMacSnapshot {
+        LiveMacSnapshot(
+            capturedAt: .now,
+            memory: .init(pageSize: 16_384, freeBytes: 2_000_000_000, activeBytes: 10_000_000_000, inactiveBytes: 4_000_000_000, wiredBytes: 3_000_000_000, compressedBytes: 1_000_000_000, purgeableBytes: 500_000_000),
+            storage: .init(totalBytes: 1_000_000_000_000, availableBytes: 512_000_000_000),
+            uptimeSeconds: 7_200,
+            cpuLoadAverages: [1.2, 0.8, 0.6],
+            power: nil,
+            activeApplicationName: "MacBrain",
+            runningApplicationNames: ["Finder", "MacBrain"],
+            networkInterfaces: ["en0"]
+        )
+    }
+
     private func collect(_ stream: AsyncThrowingStream<String, Error>) async throws -> [String] {
         var tokens: [String] = []
         for try await token in stream { tokens.append(token) }
@@ -138,6 +176,12 @@ private struct FixedSystemProfileProvider: SystemProfileProviding {
     let profile: SystemProfile
 
     func currentProfile() -> SystemProfile { profile }
+}
+
+private struct FixedLiveMacContextProvider: LiveMacContextProviding {
+    let snapshot: LiveMacSnapshot
+
+    func snapshot(for capabilities: Set<LiveMacCapability>) async -> LiveMacSnapshot { snapshot }
 }
 
 private final class CapturingStreamingProvider: InferenceProvider, @unchecked Sendable {

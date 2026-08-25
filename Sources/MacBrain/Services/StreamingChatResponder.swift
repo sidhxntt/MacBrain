@@ -6,19 +6,22 @@ struct StreamingChatResponder: ChatResponder {
     let selectedModel: @MainActor @Sendable () -> String
     let fallback: any ChatResponder
     let systemProfileProvider: any SystemProfileProviding
+    let liveContextProvider: any LiveMacContextProviding
 
     init(
         provider: any InferenceProvider,
         repository: LocalSourceRepository,
         selectedModel: @escaping @MainActor @Sendable () -> String,
         fallback: any ChatResponder,
-        systemProfileProvider: any SystemProfileProviding = LocalSystemProfileProvider()
+        systemProfileProvider: any SystemProfileProviding = LocalSystemProfileProvider(),
+        liveContextProvider: any LiveMacContextProviding = LocalLiveMacContextProvider()
     ) {
         self.provider = provider
         self.repository = repository
         self.selectedModel = selectedModel
         self.fallback = fallback
         self.systemProfileProvider = systemProfileProvider
+        self.liveContextProvider = liveContextProvider
     }
 
     func respond(to prompt: String) async throws -> String {
@@ -31,6 +34,17 @@ struct StreamingChatResponder: ChatResponder {
         AsyncThrowingStream { continuation in
             let task = Task {
                 let systemProfile = systemProfileProvider.currentProfile()
+                let liveQueryRouter = LiveMacQueryRouter()
+                let liveCapabilities = liveQueryRouter.capabilities(for: prompt)
+                if !liveCapabilities.isEmpty {
+                    let snapshot = await liveContextProvider.snapshot(for: liveCapabilities)
+                    if let response = liveQueryRouter.response(to: prompt, snapshot: snapshot, profile: systemProfile) {
+                        continuation.yield(response)
+                        continuation.finish()
+                        return
+                    }
+                }
+
                 if prompt.isLiveMemoryQuestion, let response = systemProfile.liveMemoryResponse {
                     continuation.yield(response)
                     continuation.finish()
@@ -104,10 +118,15 @@ private extension String {
 
     var isMacStatusQuestion: Bool {
         let normalized = lowercased()
-        return isLiveMemoryQuestion
+        return !LiveMacQueryRouter().capabilities(for: self).isEmpty
+            || isLiveMemoryQuestion
             || normalized.contains("my mac")
             || normalized.contains("this mac")
             || normalized.contains("my computer")
+            || normalized.contains("computer configuration")
+            || normalized.contains("machine configuration")
+            || normalized.contains("hardware configuration")
+            || normalized.contains("macbook")
             || normalized.contains("system configuration")
             || normalized.contains("system specs")
             || normalized.contains("processor")

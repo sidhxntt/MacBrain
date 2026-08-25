@@ -15,7 +15,7 @@ struct OllamaProvider: InferenceProvider {
             switch error {
             case .connection:
                 return .runtimeMissing
-            case .server, .malformedResponse, .cancelled:
+            case .server, .malformedResponse, .cancelled, .timedOut:
                 return .unavailable(error.localizedDescription)
             }
         } catch {

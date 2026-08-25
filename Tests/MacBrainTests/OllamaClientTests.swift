@@ -6,6 +6,7 @@ final class OllamaClientTests: XCTestCase {
     override func setUp() {
         super.setUp()
         MockOllamaURLProtocol.handler = nil
+        MockOllamaURLProtocol.delay = 0
     }
 
     func testModelsDecodesLocalTagsResponse() async throws {
@@ -51,6 +52,27 @@ final class OllamaClientTests: XCTestCase {
         }
 
         XCTAssertEqual(tokens, ["Hello", " world"])
+    }
+
+    func testStreamingChatStopsWhenNoVisibleTokenArrivesBeforeDeadline() async {
+        let client = OllamaClient(
+            baseURL: URL(string: "http://127.0.0.1:11434")!,
+            session: mockSession(),
+            firstTokenTimeout: .milliseconds(20)
+        )
+        MockOllamaURLProtocol.delay = 0.2
+        MockOllamaURLProtocol.handler = { _ in
+            Self.response(body: #"{"message":{"role":"assistant","content":"Too late"},"done":true}"#)
+        }
+
+        do {
+            for try await _ in client.streamChat(model: "qwen3:8b", messages: [.user("Hi")]) {}
+            XCTFail("Expected first-token timeout")
+        } catch let error as OllamaClientError {
+            XCTAssertEqual(error, .timedOut)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
     }
 
     func testStreamingChatDisablesReasoningForResponsiveVisibleTokens() async throws {
@@ -133,13 +155,14 @@ final class OllamaClientTests: XCTestCase {
     }
 }
 
-private final class MockOllamaURLProtocol: URLProtocol {
-    struct Response {
+private final class MockOllamaURLProtocol: URLProtocol, @unchecked Sendable {
+    struct Response: Sendable {
         let status: Int
         let body: Data
     }
 
     nonisolated(unsafe) static var handler: ((URLRequest) throws -> Response)?
+    nonisolated(unsafe) static var delay: TimeInterval = 0
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -156,6 +179,16 @@ private final class MockOllamaURLProtocol: URLProtocol {
             client?.urlProtocol(self, didFailWithError: error)
             return
         }
+        if Self.delay > 0 {
+            DispatchQueue.global().asyncAfter(deadline: .now() + Self.delay) { [weak self, response] in
+                self?.complete(with: response)
+            }
+        } else {
+            complete(with: response)
+        }
+    }
+
+    private func complete(with response: Response) {
         let urlResponse = HTTPURLResponse(
             url: request.url!,
             statusCode: response.status,

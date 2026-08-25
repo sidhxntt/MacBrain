@@ -5,6 +5,7 @@ enum OllamaClientError: Error, Sendable, Equatable, LocalizedError {
     case server(status: Int, message: String)
     case malformedResponse
     case cancelled
+    case timedOut
 
     var errorDescription: String? {
         switch self {
@@ -16,6 +17,8 @@ enum OllamaClientError: Error, Sendable, Equatable, LocalizedError {
             return "Ollama returned an unreadable local response."
         case .cancelled:
             return "Local generation was cancelled."
+        case .timedOut:
+            return "MacBrain did not receive a local response in time. Try again or choose a smaller model in Settings."
         }
     }
 }
@@ -25,17 +28,20 @@ struct OllamaClient: Sendable {
     private let session: URLSession
     private let retryLimit: Int
     private let retryDelay: Duration
+    private let firstTokenTimeout: Duration
 
     init(
         baseURL: URL = URL(string: "http://127.0.0.1:11434")!,
         session: URLSession = .shared,
         retryLimit: Int = 2,
-        retryDelay: Duration = .milliseconds(250)
+        retryDelay: Duration = .milliseconds(250),
+        firstTokenTimeout: Duration = .seconds(15)
     ) {
         self.baseURL = baseURL
         self.session = session
         self.retryLimit = max(0, retryLimit)
         self.retryDelay = retryDelay
+        self.firstTokenTimeout = firstTokenTimeout
     }
 
     func health() async throws {
@@ -65,13 +71,17 @@ struct OllamaClient: Sendable {
     }
 
     func streamChat(model: String, messages: [InferenceChatMessage]) -> AsyncThrowingStream<String, Error> {
-        stream(path: "/api/chat", body: OllamaChatRequest(model: model, messages: messages, stream: true, think: false)) { data in
+        stream(
+            path: "/api/chat",
+            body: OllamaChatRequest(model: model, messages: messages, stream: true, think: false),
+            firstTokenTimeout: firstTokenTimeout
+        ) { data in
             try decode(OllamaChatEvent.self, from: data).message?.content ?? ""
         }
     }
 
     func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, Error> {
-        stream(path: "/api/pull", body: OllamaPullRequest(name: model, stream: true)) { data in
+        stream(path: "/api/pull", body: OllamaPullRequest(name: model, stream: true), firstTokenTimeout: nil) { data in
             let event = try decode(OllamaPullEvent.self, from: data)
             return OllamaPullProgress(status: event.status, completed: event.completed, total: event.total)
         }
@@ -80,12 +90,34 @@ struct OllamaClient: Sendable {
     private func stream<Element: Sendable, Body: Encodable & Sendable>(
         path: String,
         body: Body,
+        firstTokenTimeout: Duration?,
         transform: @escaping @Sendable (Data) throws -> Element
     ) -> AsyncThrowingStream<Element, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
+                let watchdog = FirstTokenWatchdog()
+                let timeoutTask = firstTokenTimeout.map { timeout in
+                    Task {
+                        do {
+                            try await Task.sleep(for: timeout)
+                            guard !Task.isCancelled, await !watchdog.didReceiveToken() else { return }
+                            await watchdog.markTimedOut()
+                            continuation.finish(throwing: OllamaClientError.timedOut)
+                        } catch {
+                            // Cancellation means a local token arrived or the stream ended.
+                        }
+                    }
+                }
+                defer { timeoutTask?.cancel() }
                 do {
-                    try await streamRequest(path: path, body: body, transform: transform, continuation: continuation)
+                    try await streamRequest(
+                        path: path,
+                        body: body,
+                        transform: transform,
+                        continuation: continuation,
+                        onFirstElement: { await watchdog.markReceivedToken() }
+                    )
+                    guard !(await watchdog.didTimeOut()) else { return }
                     continuation.finish()
                 } catch is CancellationError {
                     continuation.finish(throwing: OllamaClientError.cancelled)
@@ -103,7 +135,8 @@ struct OllamaClient: Sendable {
         path: String,
         body: Body,
         transform: @escaping @Sendable (Data) throws -> Element,
-        continuation: AsyncThrowingStream<Element, Error>.Continuation
+        continuation: AsyncThrowingStream<Element, Error>.Continuation,
+        onFirstElement: @escaping @Sendable () async -> Void
     ) async throws {
         let encodedBody = try JSONEncoder().encode(body)
         let request = makeRequest(path: path, method: "POST", body: encodedBody)
@@ -126,7 +159,9 @@ struct OllamaClient: Sendable {
 
                 for try await line in bytes.lines where !line.isEmpty {
                     try Task.checkCancellation()
-                    continuation.yield(try transform(Data(line.utf8)))
+                    let element = try transform(Data(line.utf8))
+                    await onFirstElement()
+                    continuation.yield(element)
                 }
                 return
             } catch let error as OllamaClientError {
@@ -214,12 +249,28 @@ struct OllamaClient: Sendable {
     }
 }
 
+private actor FirstTokenWatchdog {
+    private var receivedToken = false
+    private var timedOut = false
+
+    func markReceivedToken() {
+        receivedToken = true
+    }
+
+    func markTimedOut() {
+        timedOut = true
+    }
+
+    func didReceiveToken() -> Bool { receivedToken }
+    func didTimeOut() -> Bool { timedOut }
+}
+
 private extension OllamaClientError {
     var isTransient: Bool {
         switch self {
         case .connection: true
         case let .server(status, _): status >= 500
-        case .malformedResponse, .cancelled: false
+        case .malformedResponse, .cancelled, .timedOut: false
         }
     }
 }

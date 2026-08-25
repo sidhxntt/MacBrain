@@ -15,7 +15,8 @@ let package = Package(
                 .linkedFramework("EventKit"),
                 .linkedFramework("Contacts"),
                 .linkedFramework("Photos"),
-                .linkedFramework("PDFKit")
+                .linkedFramework("PDFKit"),
+                .linkedFramework("IOKit")
             ]
         ),
         .testTarget(name: "MacBrainTests", dependencies: ["MacBrain"])

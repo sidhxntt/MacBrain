@@ -193,6 +193,51 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(store.currentTitle, "Summarize my product research notes")
         XCTAssertEqual(store.openSessions.first?.title, "Summarize my product research notes")
     }
+
+    func testStreamingResponseShowsPartialTextAndCancellationKeepsIt() async throws {
+        let store = ChatStore(responder: SlowStreamingResponder())
+        store.draft = "Stream this"
+
+        store.startSendingDraft()
+        try await Task.sleep(for: .milliseconds(40))
+
+        XCTAssertEqual(store.messages.map(\.text), ["Stream this", "Partial"])
+        XCTAssertTrue(store.isSending)
+
+        store.cancelSending()
+        try await Task.sleep(for: .milliseconds(40))
+
+        XCTAssertEqual(store.messages.map(\.text), ["Stream this", "Partial"])
+        XCTAssertFalse(store.isSending)
+    }
+
+    func testBurstStreamingPersistsOnlyInitialAndCompletedSession() async throws {
+        let repository = RecordingChatSessionRepository()
+        let store = ChatStore(responder: BurstStreamingResponder(), sessionRepository: repository)
+        store.draft = "Stream efficiently"
+
+        await store.sendDraft()
+        try await Task.sleep(for: .milliseconds(80))
+
+        let replacementCount = await repository.replacementCount()
+        XCTAssertEqual(replacementCount, 2)
+    }
+
+    func testInitialMessagePersistsWhileStreamingResponseIsStillOpen() async throws {
+        let repository = RecordingChatSessionRepository()
+        let store = ChatStore(responder: SlowStreamingResponder(), sessionRepository: repository)
+        store.draft = "Persist before response completes"
+
+        store.startSendingDraft()
+        for _ in 0..<20 where await repository.replacementCount() == 0 {
+            await Task.yield()
+        }
+
+        let replacementCount = await repository.replacementCount()
+        XCTAssertEqual(replacementCount, 1)
+        XCTAssertTrue(store.isSending)
+        store.cancelSending()
+    }
 }
 
 private struct ImmediateResponder: ChatResponder {
@@ -243,5 +288,50 @@ private final class GreetingSequence {
 
     func next() -> String {
         greetings.removeFirst()
+    }
+}
+
+private struct SlowStreamingResponder: ChatResponder {
+    func respond(to prompt: String) async throws -> String { "Partial complete" }
+
+    func stream(to prompt: String) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                continuation.yield("Partial")
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                    continuation.yield(" complete")
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+private struct BurstStreamingResponder: ChatResponder {
+    func respond(to prompt: String) async throws -> String { "" }
+
+    func stream(to prompt: String) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            for _ in 0..<32 { continuation.yield("token ") }
+            continuation.finish()
+        }
+    }
+}
+
+private actor RecordingChatSessionRepository: ChatSessionPersisting {
+    private var replaceCount = 0
+
+    func replacementCount() -> Int { replaceCount }
+
+    func load() async throws -> PersistedChatSessions {
+        PersistedChatSessions(open: [], archived: [], pinnedSessionIDs: [])
+    }
+
+    func replace(open: [ChatSession], archived: [ChatSession], pinnedSessionIDs: Set<UUID>) async throws {
+        replaceCount += 1
     }
 }

@@ -47,7 +47,15 @@ struct ChatComposer: View {
                             .help("Clear conversation")
                     }
 
-                    Button("Send message", systemImage: "arrow.up", action: sendMessage)
+                    if store.isSending {
+                        Button("Stop generating", systemImage: "stop.fill", action: store.cancelSending)
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.plain)
+                            .frame(width: 30, height: 30)
+                            .adaptiveGlass(role: .assistantMessage, in: RoundedRectangle(cornerRadius: 8))
+                            .help("Stop local generation")
+                    } else {
+                        Button("Send message", systemImage: "arrow.up", action: sendMessage)
                     .labelStyle(.iconOnly)
                     .buttonStyle(.plain)
                     .font(.body.bold())
@@ -60,6 +68,7 @@ struct ChatComposer: View {
                     .contentShape(RoundedRectangle(cornerRadius: 8))
                     .disabled(isSendDisabled)
                     .help("Send message")
+                    }
                 }
                 .padding(.leading, 14)
                 .padding(.trailing, 8)
@@ -77,7 +86,7 @@ struct ChatComposer: View {
     }
 
     private func sendMessage() {
-        Task { await store.sendDraft() }
+        store.startSendingDraft()
     }
 
     private func clearConversation() {

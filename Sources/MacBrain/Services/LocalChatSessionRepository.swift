@@ -6,7 +6,12 @@ struct PersistedChatSessions: Sendable {
     let pinnedSessionIDs: Set<UUID>
 }
 
-actor LocalChatSessionRepository {
+protocol ChatSessionPersisting: Sendable {
+    func load() async throws -> PersistedChatSessions
+    func replace(open: [ChatSession], archived: [ChatSession], pinnedSessionIDs: Set<UUID>) async throws
+}
+
+actor LocalChatSessionRepository: ChatSessionPersisting {
     private let database: MacBrainDatabase
 
     init(database: MacBrainDatabase) {

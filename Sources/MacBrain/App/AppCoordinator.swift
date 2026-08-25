@@ -7,15 +7,26 @@ final class AppCoordinator {
     private let logger = Logger(subsystem: "com.macbrain.app", category: "lifecycle")
     let sourceLibrary: SourceLibraryStore
     let chatStore: ChatStore
+    let inferenceStore: InferenceStore
     let workspaceStore = MainWorkspaceStore()
     private(set) var sidebarController: SidebarPanelController?
     private(set) var activationBarController: ActivationBarController?
 
-    init(sourceLibrary: SourceLibraryStore = SourceLibraryStore()) {
+    init(
+        sourceLibrary: SourceLibraryStore = SourceLibraryStore(),
+        inferenceStore: InferenceStore? = nil
+    ) {
         self.sourceLibrary = sourceLibrary
+        let configuredInferenceStore = inferenceStore ?? InferenceStore()
+        self.inferenceStore = configuredInferenceStore
         let sessionRepository = (try? MacBrainDatabase()).map(LocalChatSessionRepository.init)
         self.chatStore = ChatStore(
-            responder: LocalKnowledgeResponder(repository: sourceLibrary.repository),
+            responder: StreamingChatResponder(
+                provider: configuredInferenceStore.provider,
+                repository: sourceLibrary.repository,
+                selectedModel: { configuredInferenceStore.selectedChatModel },
+                fallback: LocalKnowledgeResponder(repository: sourceLibrary.repository)
+            ),
             sessionRepository: sessionRepository
         )
     }
@@ -41,6 +52,7 @@ final class AppCoordinator {
             NSApp.activate(ignoringOtherApps: true)
             await sourceLibrary.reload()
             await chatStore.restorePersistedSessions()
+            await inferenceStore.refresh()
             sourceLibrary.startAutomaticRefresh()
         }
     }

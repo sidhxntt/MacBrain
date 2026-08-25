@@ -15,12 +15,15 @@ final class ChatStore: ObservableObject {
 
     private let responder: any ChatResponder
     private let greetingProvider: () -> String
-    private let sessionRepository: LocalChatSessionRepository?
+    private let sessionRepository: (any ChatSessionPersisting)?
+    private var sendingTask: Task<Void, Never>?
+    private var immediatePersistenceTask: Task<Void, Never>?
+    private var deferredPersistenceTask: Task<Void, Never>?
 
     init(
         responder: any ChatResponder = LocalMockChatResponder(),
         greetingProvider: @escaping () -> String = { MacBrainGreeting.random() },
-        sessionRepository: LocalChatSessionRepository? = nil
+        sessionRepository: (any ChatSessionPersisting)? = nil
     ) {
         let initialGreeting = greetingProvider()
         let initialSession = ChatSession(messages: [], greeting: initialGreeting)
@@ -45,21 +48,57 @@ final class ChatStore: ObservableObject {
         messages.append(ChatMessage(role: .user, text: prompt))
         synchronizeCurrentSession()
         isSending = true
-        defer { isSending = false }
-
-        do {
-            let response = try await responder.respond(to: prompt)
-            messages.append(ChatMessage(role: .assistant, text: response))
-            synchronizeCurrentSession()
-        } catch {
-            messages.append(
-                ChatMessage(
-                    role: .assistant,
-                    text: "I couldn't complete that local response. Please try again."
-                )
-            )
+        defer {
+            isSending = false
             synchronizeCurrentSession()
         }
+
+        var streamedText = ""
+        var streamedMessageID: UUID?
+        do {
+            for try await token in responder.stream(to: prompt) {
+                try Task.checkCancellation()
+                streamedText.append(token)
+                if let streamedMessageID, let index = messages.firstIndex(where: { $0.id == streamedMessageID }) {
+                    let message = messages[index]
+                    messages[index] = ChatMessage(id: message.id, role: .assistant, text: streamedText, createdAt: message.createdAt)
+                } else {
+                    let message = ChatMessage(role: .assistant, text: streamedText)
+                    streamedMessageID = message.id
+                    messages.append(message)
+                }
+                synchronizeCurrentSession(persisting: false)
+            }
+        } catch is CancellationError {
+            // Preserve already-streamed text; cancellation is an expected local action.
+        } catch let error as OllamaClientError where error == .cancelled {
+            // Preserve already-streamed text; cancellation is an expected local action.
+        } catch {
+            if streamedText.isEmpty {
+                messages.append(
+                    ChatMessage(
+                        role: .assistant,
+                        text: "I couldn't complete that local response. Check Ollama in Settings, then try again."
+                    )
+                )
+            }
+        }
+    }
+
+    func startSendingDraft() {
+        guard sendingTask == nil else { return }
+        sendingTask = Task { [weak self] in
+            guard let self else { return }
+            await self.sendDraft()
+            self.sendingTask = nil
+        }
+    }
+
+    func cancelSending() {
+        sendingTask?.cancel()
+        sendingTask = nil
+        isSending = false
+        synchronizeCurrentSession()
     }
 
     func clear() {
@@ -195,7 +234,7 @@ final class ChatStore: ObservableObject {
         isSending = false
     }
 
-    private func synchronizeCurrentSession() {
+    private func synchronizeCurrentSession(persisting: Bool = true) {
         guard let index = openSessions.firstIndex(where: { $0.id == activeSessionID }) else { return }
         openSessions[index] = ChatSession(
             id: activeSessionID,
@@ -203,16 +242,49 @@ final class ChatStore: ObservableObject {
             messages: messages,
             greeting: welcomeGreeting
         )
-        persistSessions()
+        persistSessions(debounced: !persisting)
     }
 
-    private func persistSessions() {
+    private func persistSessions(debounced: Bool = false) {
         guard let sessionRepository else { return }
         let open = openSessions
         let archived = archivedSessions
         let pinned = pinnedSessionIDs
-        Task {
-            try? await sessionRepository.replace(open: open, archived: archived, pinnedSessionIDs: pinned)
+
+        if debounced {
+            deferredPersistenceTask?.cancel()
+            deferredPersistenceTask = Task { [weak self] in
+                do {
+                    try await Task.sleep(for: .milliseconds(350))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                self?.enqueueImmediatePersistence(
+                    open: open,
+                    archived: archived,
+                    pinned: pinned,
+                    repository: sessionRepository
+                )
+            }
+            return
+        }
+
+        deferredPersistenceTask?.cancel()
+        deferredPersistenceTask = nil
+        enqueueImmediatePersistence(open: open, archived: archived, pinned: pinned, repository: sessionRepository)
+    }
+
+    private func enqueueImmediatePersistence(
+        open: [ChatSession],
+        archived: [ChatSession],
+        pinned: Set<UUID>,
+        repository: any ChatSessionPersisting
+    ) {
+        let previousTask = immediatePersistenceTask
+        immediatePersistenceTask = Task {
+            await previousTask?.value
+            try? await repository.replace(open: open, archived: archived, pinnedSessionIDs: pinned)
         }
     }
 }

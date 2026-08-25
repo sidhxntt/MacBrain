@@ -218,6 +218,26 @@ actor MacBrainDatabase: VectorStore {
         return try rows.map(StoredChunk.init(row:))
     }
 
+    func searchDocuments(matching query: String, limit: Int = 5) throws -> [StoredDocument] {
+        try ensureMigrated()
+        let expression = query.searchExpression
+        guard !expression.isEmpty else { return [] }
+        let rows = try connection.rows(
+            """
+            SELECT d.id, d.source_id, d.external_id, d.title, d.text, d.source_label, d.content_hash,
+                   d.created_at, d.modified_at, d.is_deleted, d.metadata
+            FROM chunks_fts
+            JOIN chunks c ON c.id = chunks_fts.chunk_id
+            JOIN documents d ON d.id = c.document_id
+            WHERE chunks_fts MATCH ? AND c.is_deleted = 0 AND d.is_deleted = 0
+            ORDER BY rank
+            LIMIT ?
+            """,
+            [.text(expression), .integer(limit)]
+        )
+        return try rows.map(StoredDocument.init(row:))
+    }
+
     func upsert(_ embedding: StoredEmbedding) throws {
         try ensureMigrated()
         try insert(embedding)

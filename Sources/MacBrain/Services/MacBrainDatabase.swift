@@ -19,7 +19,7 @@ enum MacBrainDatabaseError: LocalizedError, Equatable, Sendable {
 }
 
 actor MacBrainDatabase: VectorStore {
-    static let currentSchemaVersion = 8
+    static let currentSchemaVersion = 9
 
     private let connection: SQLiteConnection
     private(set) var schemaVersion = 0
@@ -629,13 +629,13 @@ private let migrations: [DatabaseMigration] = [
         "INSERT INTO chunks_fts(chunk_id, normalized_text) SELECT c.id, lower(d.title || ' ' || d.source_label || ' ' || d.external_id || ' ' || CAST(d.metadata AS TEXT) || ' ' || c.text) FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.is_deleted = 0 AND d.is_deleted = 0"
     ]),
     DatabaseMigration(version: 8, statements: [
+        "ALTER TABLE conversations ADD COLUMN model_identifier TEXT NOT NULL DEFAULT 'local'"
+    ]),
+    DatabaseMigration(version: 9, statements: [
         "ALTER TABLE entities ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0",
         "ALTER TABLE entity_aliases ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0",
         "CREATE INDEX IF NOT EXISTS mentions_chunk_index ON mentions(chunk_id)",
         "CREATE INDEX IF NOT EXISTS relationships_provenance_index ON relationships(provenance_chunk_id)"
-    ])
-    , DatabaseMigration(version: 8, statements: [
-        "ALTER TABLE conversations ADD COLUMN model_identifier TEXT NOT NULL DEFAULT 'local'"
     ])
 ]
 

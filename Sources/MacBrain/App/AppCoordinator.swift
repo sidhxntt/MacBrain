@@ -25,6 +25,7 @@ final class AppCoordinator {
             provider: configuredInferenceStore.provider,
             repository: sourceLibrary.repository,
             selectedModel: { configuredInferenceStore.selectedChatModel },
+            selectedEmbeddingModel: { configuredInferenceStore.selectedEmbeddingModel },
             fallback: LocalKnowledgeResponder(repository: sourceLibrary.repository)
         )
         self.chatStore = ChatStore(

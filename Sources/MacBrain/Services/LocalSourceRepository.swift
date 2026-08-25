@@ -261,6 +261,13 @@ actor LocalSourceRepository {
         return EvidenceSearchResult(evidence: evidence, isLowConfidence: evidence.isEmpty)
     }
 
+    /// Graph lookup is best-effort by design: a missing or unavailable graph never blocks
+    /// ordinary local keyword retrieval.
+    func graphEvidence(for query: String, limit: Int = 4) async -> [GraphEvidence] {
+        guard let database else { return [] }
+        return (try? await database.graphEvidence(matching: query, maximumResults: limit)) ?? []
+    }
+
     func documentCount(for connectorID: UUID) -> Int {
         snapshot.documents.filter { $0.connectorID == connectorID }.count
     }

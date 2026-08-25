@@ -24,6 +24,17 @@ final class OllamaClientTests: XCTestCase {
         XCTAssertEqual(models.first?.quantization, "Q4_K_M")
     }
 
+    func testModelsNormalizesOllamaLatestTagToRequestedModelName() async throws {
+        let client = OllamaClient(baseURL: URL(string: "http://127.0.0.1:11434")!, session: mockSession())
+        MockOllamaURLProtocol.handler = { _ in
+            Self.response(body: #"{"models":[{"name":"nomic-embed-text:latest"}]}"#)
+        }
+
+        let models = try await client.models()
+
+        XCTAssertEqual(models.map(\.name), ["nomic-embed-text"])
+    }
+
     func testStreamingChatEmitsEachTokenInOrder() async throws {
         let client = OllamaClient(baseURL: URL(string: "http://127.0.0.1:11434")!, session: mockSession())
         MockOllamaURLProtocol.handler = { request in
@@ -40,6 +51,19 @@ final class OllamaClientTests: XCTestCase {
         }
 
         XCTAssertEqual(tokens, ["Hello", " world"])
+    }
+
+    func testStreamingChatDisablesReasoningForResponsiveVisibleTokens() async throws {
+        let request = OllamaChatRequest(
+            model: "qwen3:8b",
+            messages: [.user("Hi")],
+            stream: true,
+            think: false
+        )
+
+        let payload = try JSONEncoder().encode(request)
+
+        XCTAssertTrue(try XCTUnwrap(String(data: payload, encoding: .utf8)).contains("\"think\":false"))
     }
 
     func testServerFailureExposesActionableError() async {

@@ -47,7 +47,7 @@ struct OllamaClient: Sendable {
         let response = try decode(OllamaTagsResponse.self, from: data)
         return response.models.map {
             InferenceModel(
-                name: $0.name,
+                name: canonicalModelName($0.name),
                 size: $0.size,
                 parameterSize: $0.details?.parameterSize,
                 quantization: $0.details?.quantizationLevel
@@ -65,7 +65,7 @@ struct OllamaClient: Sendable {
     }
 
     func streamChat(model: String, messages: [InferenceChatMessage]) -> AsyncThrowingStream<String, Error> {
-        stream(path: "/api/chat", body: OllamaChatRequest(model: model, messages: messages, stream: true)) { data in
+        stream(path: "/api/chat", body: OllamaChatRequest(model: model, messages: messages, stream: true, think: false)) { data in
             try decode(OllamaChatEvent.self, from: data).message?.content ?? ""
         }
     }
@@ -201,6 +201,10 @@ struct OllamaClient: Sendable {
         return request
     }
 
+    private func canonicalModelName(_ name: String) -> String {
+        name.hasSuffix(":latest") ? String(name.dropLast(7)) : name
+    }
+
     private func decode<Value: Decodable>(_ type: Value.Type, from data: Data) throws -> Value {
         do {
             return try JSONDecoder().decode(type, from: data)
@@ -249,10 +253,11 @@ private struct OllamaEmbeddingResponse: Decodable {
     let embeddings: [[Float]]
 }
 
-private struct OllamaChatRequest: Encodable {
+struct OllamaChatRequest: Encodable {
     let model: String
     let messages: [InferenceChatMessage]
     let stream: Bool
+    let think: Bool
 }
 
 private struct OllamaChatEvent: Decodable {

@@ -50,6 +50,21 @@ struct SystemProfile: Sendable, Equatable {
         memoryUsage.map { $0.markdownBreakdown(totalMemoryBytes: memoryBytes) }
     }
 
+    var markdownSummary: String {
+        """
+        ## Your Mac
+
+        - **User:** \(userDisplayName)
+        - **Computer:** \(computerName)
+        - **Model:** \(hardwareModel)
+        - **Processor:** \(processor)
+        - **Memory:** \(byteCount(memoryBytes))
+        - **macOS:** \(operatingSystem)
+        - **Storage:** \(byteCount(totalDiskBytes)) total · \(byteCount(availableDiskBytes)) available
+        - **Region:** \(localeIdentifier) · \(timeZoneIdentifier)
+        """
+    }
+
     private func byteCount(_ value: some BinaryInteger) -> String {
         ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .decimal)
     }

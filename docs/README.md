@@ -18,6 +18,7 @@ Documentation path in this workspace: `docs/`
 6. [Beta metrics](./beta-metrics.md) — measurable validation and release gates.
 7. [MacBrain and Siri AI](./siri-ai-comparison.md) — product positioning and scope comparison.
 8. [Post-MVP roadmap](./superpowers/plans/2026-08-23-notch-brain-post-mvp.md) — future work, not MVP requirements.
+9. [Agentic macOS action layer](./todos/agentic-action-layer.md) — post-MVP Phase 6 plan for user-authorized system and app actions.
 
 ## Relative MVP difficulty
 
@@ -73,3 +74,4 @@ All data stays on the Mac by default. No hosted model or silent whole-disk index
 - [MVP phases 01–10](./MVP/01-app-shell.md)
 - [MVP implementation plan](./superpowers/plans/2026-08-23-notch-brain.md)
 - [Post-MVP implementation plan](./superpowers/plans/2026-08-23-notch-brain-post-mvp.md)
+- [Agentic macOS action layer](./todos/agentic-action-layer.md)

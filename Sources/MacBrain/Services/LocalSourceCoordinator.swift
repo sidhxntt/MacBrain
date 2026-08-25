@@ -5,9 +5,11 @@ actor LocalSourceCoordinator {
     private let logger = Logger(subsystem: "com.macbrain.app", category: "connectors")
     private let repository: LocalSourceRepository
     private let connectors: [SourceConnectorKind: any SourceConnector]
+    private let indexingJobs: IndexingJobCoordinator?
 
     init(
         repository: LocalSourceRepository,
+        indexingJobs: IndexingJobCoordinator? = nil,
         connectors: [any SourceConnector] = [
             AppleNotesConnector(),
             AppleMailConnector(),
@@ -23,6 +25,7 @@ actor LocalSourceCoordinator {
         ]
     ) {
         self.repository = repository
+        self.indexingJobs = indexingJobs
         self.connectors = Dictionary(uniqueKeysWithValues: connectors.map { ($0.kind, $0) })
     }
 
@@ -37,6 +40,10 @@ actor LocalSourceCoordinator {
             record.syncProgress = nil
             try? await repository.save(record)
         }
+    }
+
+    func processQueuedIndexing(using provider: any InferenceProvider, embeddingModel: String) async {
+        await indexingJobs?.processPending(using: provider, embeddingModel: embeddingModel)
     }
 
     func create(kind: SourceConnectorKind, displayName: String, configuration: SourceConnectorConfiguration) async throws -> ConnectorRecord {
@@ -66,6 +73,31 @@ actor LocalSourceCoordinator {
         do {
             if let batchedConnector = connector as? any BatchedSourceConnector {
                 return try await syncBatches(using: batchedConnector, record: record)
+            }
+
+            if let fileBackedConnector = connector as? any FileBackedSourceConnector {
+                let result = try await fileBackedConnector.scan(record: record)
+                if let latest = await repository.record(id: id), latest.status == .paused {
+                    return latest
+                }
+                let documentCount = try await repository.reconcileDocuments(
+                    for: id,
+                    changedDocuments: result.changedDocuments,
+                    presentExternalIDs: result.presentExternalIDs
+                )
+                let changedChunkIDs = await repository.indexedChunkIDs(
+                    for: id,
+                    externalIDs: Set(result.changedDocuments.map(\.externalID))
+                )
+                await indexingJobs?.enqueue(sourceID: id, changedChunkIDs: changedChunkIDs)
+                record.configuration.fileFingerprints = result.fingerprints
+                record.status = .ready
+                record.documentCount = documentCount
+                record.lastSuccessfulSync = .now
+                record.syncProgress = nil
+                try await repository.save(record)
+                logger.info("Connector incremental sync saved: \(record.kind.rawValue, privacy: .public), count \(documentCount, privacy: .public)")
+                return record
             }
 
             let documents = try await connector.sync(record: record)
@@ -149,6 +181,7 @@ actor LocalSourceCoordinator {
     }
 
     func remove(id: UUID) async throws {
+        await indexingJobs?.cancel(sourceID: id)
         try await repository.remove(id: id)
     }
 }

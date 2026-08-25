@@ -69,7 +69,7 @@ struct DesktopChatSessionTitle: View {
             .help(chatStore.isPinned(session) ? "Unpin chat" : "Pin chat")
 
             Button(role: .destructive) {
-                chatStore.close(session)
+                chatStore.delete(session)
             } label: {
                 Image(systemName: "trash")
             }

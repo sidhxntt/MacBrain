@@ -20,12 +20,19 @@ final class AppCoordinator {
         let configuredInferenceStore = inferenceStore ?? InferenceStore()
         self.inferenceStore = configuredInferenceStore
         let sessionRepository = (try? MacBrainDatabase()).map(LocalChatSessionRepository.init)
+        let responseCache: any ResponseCaching = (try? MacBrainDatabase()).map(LocalResponseCache.init) ?? InMemoryResponseCache()
+        let streamingResponder = StreamingChatResponder(
+            provider: configuredInferenceStore.provider,
+            repository: sourceLibrary.repository,
+            selectedModel: { configuredInferenceStore.selectedChatModel },
+            fallback: LocalKnowledgeResponder(repository: sourceLibrary.repository)
+        )
         self.chatStore = ChatStore(
-            responder: StreamingChatResponder(
-                provider: configuredInferenceStore.provider,
-                repository: sourceLibrary.repository,
-                selectedModel: { configuredInferenceStore.selectedChatModel },
-                fallback: LocalKnowledgeResponder(repository: sourceLibrary.repository)
+            responder: ResponseCachingResponder(
+                upstream: streamingResponder,
+                cache: responseCache,
+                sourceRevisionProvider: sourceLibrary.repository,
+                selectedModel: { configuredInferenceStore.selectedChatModel }
             ),
             sessionRepository: sessionRepository
         )
@@ -53,6 +60,10 @@ final class AppCoordinator {
             await sourceLibrary.reload()
             await chatStore.restorePersistedSessions()
             await inferenceStore.refresh()
+            await sourceLibrary.processQueuedIndexing(
+                using: inferenceStore.provider,
+                embeddingModel: inferenceStore.selectedEmbeddingModel
+            )
             sourceLibrary.startAutomaticRefresh()
         }
     }

@@ -17,6 +17,16 @@ protocol BatchedSourceConnector: SourceConnector {
     func syncBatch(record: ConnectorRecord) async throws -> ConnectorSyncBatch
 }
 
+struct FileBackedSyncResult: Sendable {
+    let changedDocuments: [ConnectorDocument]
+    let presentExternalIDs: [String]
+    let fingerprints: [String: FileFingerprint]
+}
+
+protocol FileBackedSourceConnector: SourceConnector {
+    func scan(record: ConnectorRecord) async throws -> FileBackedSyncResult
+}
+
 protocol AppleScriptExecuting: Sendable {
     func execute(_ source: String) async throws -> String
 }
@@ -178,19 +188,30 @@ struct AppleMailConnector: BatchedSourceConnector {
     }
 }
 
-struct FolderConnector: SourceConnector {
+struct FolderConnector: FileBackedSourceConnector {
     let kind: SourceConnectorKind = .folder
 
     func sync(record: ConnectorRecord) async throws -> [ConnectorDocument] {
+        try await scan(record: record).changedDocuments
+    }
+
+    func scan(record: ConnectorRecord) async throws -> FileBackedSyncResult {
         let access = try SecurityScopedLocalAccess(configuration: record.configuration)
         defer { access.stop() }
         guard FileManager.default.fileExists(atPath: access.url.path) else {
             throw ConnectorError.sourceUnavailable("The selected folder is no longer available.")
         }
-        return try LocalFileIndexer.documents(
+        let scan = try LocalFileIndexer.scan(
             rootURL: access.url,
             connectorID: record.id,
-            sourceLabel: "Folder: \(record.displayName)"
+            sourceLabel: "Folder: \(record.displayName)",
+            knownFingerprints: record.configuration.fileFingerprints,
+            excludedRelativePaths: record.configuration.excludedRelativePaths
+        )
+        return FileBackedSyncResult(
+            changedDocuments: scan.changedDocuments,
+            presentExternalIDs: scan.presentExternalIDs,
+            fingerprints: scan.fingerprints
         )
     }
 }
@@ -229,7 +250,7 @@ actor GitRunner: GitRunning {
     }
 }
 
-struct GitRepositoryConnector: SourceConnector {
+struct GitRepositoryConnector: FileBackedSourceConnector {
     let kind: SourceConnectorKind = .gitRepository
     let runner: any GitRunning
 
@@ -238,6 +259,10 @@ struct GitRepositoryConnector: SourceConnector {
     }
 
     func sync(record: ConnectorRecord) async throws -> [ConnectorDocument] {
+        try await scan(record: record).changedDocuments
+    }
+
+    func scan(record: ConnectorRecord) async throws -> FileBackedSyncResult {
         let access = try SecurityScopedLocalAccess(configuration: record.configuration)
         defer { access.stop() }
         let repositoryURL = access.url
@@ -257,12 +282,15 @@ struct GitRepositoryConnector: SourceConnector {
         let trackedPaths = Set(
             trackedFilesOutput.split(separator: "\0", omittingEmptySubsequences: true).map(String.init)
         )
-        var documents = try LocalFileIndexer.documents(
+        let fileScan = try LocalFileIndexer.scan(
             rootURL: repositoryURL,
             connectorID: record.id,
-            sourceLabel: "Git: \(record.displayName)"
+            sourceLabel: "Git: \(record.displayName)",
+            knownFingerprints: record.configuration.fileFingerprints,
+            allowedRelativePaths: trackedPaths,
+            excludedRelativePaths: record.configuration.excludedRelativePaths
         )
-        documents = documents.map { document in
+        let files = fileScan.changedDocuments.map { document in
             var metadata = document.metadata
             metadata["tracked"] = trackedPaths.contains(document.metadata["relativePath"] ?? "") ? "true" : "false"
             metadata["repository"] = record.displayName
@@ -277,7 +305,22 @@ struct GitRepositoryConnector: SourceConnector {
                 metadata: metadata
             )
         }
-        return documents + (try ConnectorRowParser.git(logOutput, record: record, branches: branches))
+        let commits = try ConnectorRowParser.git(logOutput, record: record, branches: branches)
+        let fingerprints = Dictionary(uniqueKeysWithValues: fileScan.fingerprints.map { key, value in
+            (
+                key,
+                FileFingerprint(
+                    byteCount: value.byteCount,
+                    modifiedAt: value.modifiedAt,
+                    documentExternalIDs: value.documentExternalIDs.map { "git-file:\($0)" }
+                )
+            )
+        })
+        return FileBackedSyncResult(
+            changedDocuments: files + commits,
+            presentExternalIDs: fileScan.presentExternalIDs.map { "git-file:\($0)" } + commits.map(\.externalID),
+            fingerprints: fingerprints
+        )
     }
 }
 

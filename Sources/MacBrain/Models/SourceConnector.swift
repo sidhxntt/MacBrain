@@ -212,6 +212,8 @@ struct SourceConnectorConfiguration: Codable, Equatable, Sendable {
     var commitRange: String?
     var syncOffset: Int?
     var initialSyncCompleted: Bool
+    var excludedRelativePaths: [String]
+    var fileFingerprints: [String: FileFingerprint]
 
     init(
         accountName: String? = nil,
@@ -223,7 +225,9 @@ struct SourceConnectorConfiguration: Codable, Equatable, Sendable {
         browserProfileName: String? = nil,
         commitRange: String? = nil,
         syncOffset: Int? = nil,
-        initialSyncCompleted: Bool = false
+        initialSyncCompleted: Bool = false,
+        excludedRelativePaths: [String] = [],
+        fileFingerprints: [String: FileFingerprint] = [:]
     ) {
         self.accountName = accountName
         self.containerName = containerName
@@ -235,6 +239,8 @@ struct SourceConnectorConfiguration: Codable, Equatable, Sendable {
         self.commitRange = commitRange
         self.syncOffset = syncOffset
         self.initialSyncCompleted = initialSyncCompleted
+        self.excludedRelativePaths = excludedRelativePaths
+        self.fileFingerprints = fileFingerprints
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -248,6 +254,8 @@ struct SourceConnectorConfiguration: Codable, Equatable, Sendable {
         case commitRange
         case syncOffset
         case initialSyncCompleted
+        case excludedRelativePaths
+        case fileFingerprints
     }
 
     init(from decoder: Decoder) throws {
@@ -262,7 +270,15 @@ struct SourceConnectorConfiguration: Codable, Equatable, Sendable {
         commitRange = try container.decodeIfPresent(String.self, forKey: .commitRange)
         syncOffset = try container.decodeIfPresent(Int.self, forKey: .syncOffset)
         initialSyncCompleted = try container.decodeIfPresent(Bool.self, forKey: .initialSyncCompleted) ?? false
+        excludedRelativePaths = try container.decodeIfPresent([String].self, forKey: .excludedRelativePaths) ?? []
+        fileFingerprints = try container.decodeIfPresent([String: FileFingerprint].self, forKey: .fileFingerprints) ?? [:]
     }
+}
+
+struct FileFingerprint: Codable, Equatable, Sendable {
+    let byteCount: Int64
+    let modifiedAt: Date?
+    let documentExternalIDs: [String]
 }
 
 struct ConnectorDocument: Codable, Identifiable, Equatable, Sendable {

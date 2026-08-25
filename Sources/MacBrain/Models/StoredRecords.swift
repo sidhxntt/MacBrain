@@ -212,18 +212,47 @@ struct StoredRelationship: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+enum IndexingJobKind: String, Codable, CaseIterable, Hashable, Sendable {
+    case embedding
+    case graphExtraction
+}
+
+enum IndexingJobState: String, Codable, Equatable, Sendable {
+    case pending
+    case processing
+    case completed
+    case failed
+    case cancelled
+}
+
 struct IndexingJob: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let sourceID: UUID
-    var state: String
+    var kind: IndexingJobKind
+    var state: IndexingJobState
+    var chunkIDs: [UUID]
+    var attempts: Int
     var detail: String?
     var createdAt: Date
     var updatedAt: Date
 
-    init(id: UUID = UUID(), sourceID: UUID, state: String, detail: String? = nil, createdAt: Date = .now, updatedAt: Date = .now) {
+    init(
+        id: UUID = UUID(),
+        sourceID: UUID,
+        kind: IndexingJobKind,
+        state: IndexingJobState = .pending,
+        chunkIDs: [UUID] = [],
+        attempts: Int = 0,
+        detail: String? = nil,
+        createdAt: Date = .now,
+        updatedAt: Date = .now
+    ) {
         self.id = id
         self.sourceID = sourceID
+        self.kind = kind
         self.state = state
+        self.chunkIDs = chunkIDs
+        self.attempts = attempts
         self.detail = detail
         self.createdAt = createdAt
         self.updatedAt = updatedAt

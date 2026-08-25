@@ -16,20 +16,28 @@ final class ChatStore: ObservableObject {
     private let responder: any ChatResponder
     private let greetingProvider: () -> String
     private let sessionRepository: (any ChatSessionPersisting)?
+    private let responseTimeout: Duration
     private var sendingTask: Task<Void, Never>?
+    private var sendingTaskID: UUID?
+    private var activeResponseID: UUID?
+    private var activeAssistantMessageID: UUID?
+    private var responseWatchdogTask: Task<Void, Never>?
+    private var watchdogResponseID: UUID?
     private var immediatePersistenceTask: Task<Void, Never>?
     private var deferredPersistenceTask: Task<Void, Never>?
 
     init(
         responder: any ChatResponder = LocalMockChatResponder(),
         greetingProvider: @escaping () -> String = { MacBrainGreeting.random() },
-        sessionRepository: (any ChatSessionPersisting)? = nil
+        sessionRepository: (any ChatSessionPersisting)? = nil,
+        responseTimeout: Duration = .seconds(45)
     ) {
         let initialGreeting = greetingProvider()
         let initialSession = ChatSession(messages: [], greeting: initialGreeting)
         self.responder = responder
         self.greetingProvider = greetingProvider
         self.sessionRepository = sessionRepository
+        self.responseTimeout = responseTimeout
         self.openSessions = [initialSession]
         self.activeSessionID = initialSession.id
         self.welcomeGreeting = initialGreeting
@@ -45,18 +53,23 @@ final class ChatStore: ObservableObject {
         if currentTitle == "Untitled" {
             currentTitle = ChatTitleGenerator.title(for: prompt)
         }
+        let conversation = messages
         messages.append(ChatMessage(role: .user, text: prompt))
         synchronizeCurrentSession()
+        let responseID = UUID()
+        activeResponseID = responseID
+        activeAssistantMessageID = nil
         isSending = true
+        armResponseWatchdog(for: responseID)
         defer {
-            isSending = false
-            synchronizeCurrentSession()
+            finishResponseIfActive(responseID)
         }
 
         var streamedText = ""
         var streamedMessageID: UUID?
         do {
-            for try await token in responder.stream(to: prompt) {
+            for try await token in responder.stream(to: prompt, conversation: conversation) {
+                guard activeResponseID == responseID else { return }
                 try Task.checkCancellation()
                 streamedText.append(token)
                 if let streamedMessageID, let index = messages.firstIndex(where: { $0.id == streamedMessageID }) {
@@ -65,8 +78,10 @@ final class ChatStore: ObservableObject {
                 } else {
                     let message = ChatMessage(role: .assistant, text: streamedText)
                     streamedMessageID = message.id
+                    activeAssistantMessageID = message.id
                     messages.append(message)
                 }
+                armResponseWatchdog(for: responseID)
                 synchronizeCurrentSession(persisting: false)
             }
         } catch is CancellationError {
@@ -74,7 +89,7 @@ final class ChatStore: ObservableObject {
         } catch let error as OllamaClientError where error == .cancelled {
             // Preserve already-streamed text; cancellation is an expected local action.
         } catch {
-            if streamedText.isEmpty {
+            if activeResponseID == responseID, streamedText.isEmpty {
                 messages.append(
                     ChatMessage(
                         role: .assistant,
@@ -87,24 +102,34 @@ final class ChatStore: ObservableObject {
 
     func startSendingDraft() {
         guard sendingTask == nil else { return }
+        let taskID = UUID()
+        sendingTaskID = taskID
         sendingTask = Task { [weak self] in
             guard let self else { return }
             await self.sendDraft()
+            guard self.sendingTaskID == taskID else { return }
             self.sendingTask = nil
+            self.sendingTaskID = nil
         }
     }
 
     func cancelSending() {
         sendingTask?.cancel()
         sendingTask = nil
+        sendingTaskID = nil
+        activeResponseID = nil
+        activeAssistantMessageID = nil
+        responseWatchdogTask?.cancel()
+        responseWatchdogTask = nil
+        watchdogResponseID = nil
         isSending = false
         synchronizeCurrentSession()
     }
 
     func clear() {
+        cancelSending()
         messages.removeAll()
         draft = ""
-        isSending = false
         synchronizeCurrentSession()
     }
 
@@ -131,7 +156,10 @@ final class ChatStore: ObservableObject {
         archivedSessions.removeAll { $0.id == closingSession.id }
         archivedSessions.insert(closingSession, at: 0)
 
-        guard closingSession.id == activeSessionID else { return }
+        guard closingSession.id == activeSessionID else {
+            persistSessions()
+            return
+        }
 
         if let nextSession = openSessions[safe: min(index, openSessions.count - 1)] {
             activate(nextSession)
@@ -140,6 +168,37 @@ final class ChatStore: ObservableObject {
             openSessions = [replacementSession]
             activate(replacementSession)
         }
+        persistSessions()
+    }
+
+    func delete(_ session: ChatSession) {
+        let deletingActiveSession = session.id == activeSessionID
+        if deletingActiveSession {
+            cancelSending()
+            synchronizeCurrentSession()
+        }
+
+        guard let index = openSessions.firstIndex(where: { $0.id == session.id }) else {
+            archivedSessions.removeAll { $0.id == session.id }
+            pinnedSessionIDs.remove(session.id)
+            persistSessions()
+            return
+        }
+
+        openSessions.remove(at: index)
+        archivedSessions.removeAll { $0.id == session.id }
+        pinnedSessionIDs.remove(session.id)
+
+        if deletingActiveSession {
+            if let nextSession = openSessions[safe: min(index, openSessions.count - 1)] {
+                activate(nextSession)
+            } else {
+                let replacementSession = ChatSession(messages: [], greeting: greetingProvider())
+                openSessions = [replacementSession]
+                activate(replacementSession)
+            }
+        }
+        persistSessions()
     }
 
     func restore(_ session: ChatSession) {
@@ -243,6 +302,65 @@ final class ChatStore: ObservableObject {
             greeting: welcomeGreeting
         )
         persistSessions(debounced: !persisting)
+    }
+
+    private func armResponseWatchdog(for responseID: UUID) {
+        responseWatchdogTask?.cancel()
+        watchdogResponseID = responseID
+        let timeout = responseTimeout
+        responseWatchdogTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: timeout)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            self?.timeoutResponse(responseID)
+        }
+    }
+
+    private func timeoutResponse(_ responseID: UUID) {
+        guard activeResponseID == responseID else { return }
+
+        let timeoutMessage = "I couldn't complete that local response because the local model didn't respond in time. Check Ollama in Settings, then try again."
+        if let messageID = activeAssistantMessageID,
+           let index = messages.firstIndex(where: { $0.id == messageID }) {
+            let message = messages[index]
+            messages[index] = ChatMessage(
+                id: message.id,
+                role: .assistant,
+                text: message.text + "\n\n" + timeoutMessage,
+                createdAt: message.createdAt
+            )
+        } else {
+            messages.append(ChatMessage(role: .assistant, text: timeoutMessage))
+        }
+
+        activeResponseID = nil
+        activeAssistantMessageID = nil
+        isSending = false
+        sendingTask?.cancel()
+        sendingTask = nil
+        sendingTaskID = nil
+        if watchdogResponseID == responseID {
+            responseWatchdogTask?.cancel()
+            responseWatchdogTask = nil
+            watchdogResponseID = nil
+        }
+        synchronizeCurrentSession()
+    }
+
+    private func finishResponseIfActive(_ responseID: UUID) {
+        guard activeResponseID == responseID else { return }
+        activeResponseID = nil
+        activeAssistantMessageID = nil
+        isSending = false
+        if watchdogResponseID == responseID {
+            responseWatchdogTask?.cancel()
+            responseWatchdogTask = nil
+            watchdogResponseID = nil
+        }
+        synchronizeCurrentSession()
     }
 
     private func persistSessions(debounced: Bool = false) {

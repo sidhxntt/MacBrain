@@ -16,6 +16,7 @@ APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 CLANG_CACHE_DIR="/tmp/macbrain-clang-cache"
 SWIFTPM_CACHE_DIR="/tmp/macbrain-swiftpm-cache"
+ENTITLEMENTS="$ROOT_DIR/release/MacBrain.entitlements"
 
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 
@@ -41,7 +42,7 @@ cat >"$INFO_PLIST" <<PLIST
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundleName</key><string>MacBrain</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>LSUIElement</key><true/>
+  <key>LSUIElement</key><false/>
   <key>LSMinimumSystemVersion</key><string>$MIN_SYSTEM_VERSION</string>
   <key>NSAppleEventsUsageDescription</key><string>MacBrain uses Automation to sync Apple Notes and Apple Mail locally on this Mac.</string>
   <key>NSCalendarsFullAccessUsageDescription</key><string>MacBrain reads your Calendar locally to recall work context.</string>
@@ -60,6 +61,15 @@ open_app() {
 case "$MODE" in
   --bundle|bundle)
     echo "Built $APP_BUNDLE"
+    ;;
+  --release|release)
+    if [[ -z "${SIGNING_IDENTITY:-}" ]]; then
+      echo "SIGNING_IDENTITY must name a Developer ID Application certificate for a release build." >&2
+      exit 2
+    fi
+    codesign --force --deep --options runtime --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP_BUNDLE"
+    "$ROOT_DIR/script/release_check.sh" "$APP_BUNDLE"
+    echo "Signed release bundle: $APP_BUNDLE"
     ;;
   run)
     open_app
@@ -82,7 +92,7 @@ case "$MODE" in
     echo "$APP_NAME launched successfully"
     ;;
   *)
-    echo "usage: $0 [run|--bundle|--debug|--logs|--telemetry|--verify]" >&2
+    echo "usage: $0 [run|--bundle|--release|--debug|--logs|--telemetry|--verify]" >&2
     exit 2
     ;;
 esac

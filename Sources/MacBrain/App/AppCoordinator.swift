@@ -7,6 +7,7 @@ final class AppCoordinator {
     private let logger = Logger(subsystem: "com.macbrain.app", category: "lifecycle")
     let sourceLibrary: SourceLibraryStore
     let chatStore: ChatStore
+    let memoryStore: MemoryStore
     let inferenceStore: InferenceStore
     let workspaceStore = MainWorkspaceStore()
     private(set) var sidebarController: SidebarPanelController?
@@ -19,12 +20,15 @@ final class AppCoordinator {
         self.sourceLibrary = sourceLibrary
         let configuredInferenceStore = inferenceStore ?? InferenceStore()
         self.inferenceStore = configuredInferenceStore
-        let sessionRepository = (try? MacBrainDatabase()).map(LocalChatSessionRepository.init)
+        let sessionDatabase = try? MacBrainDatabase()
+        let sessionRepository = sessionDatabase.map(LocalChatSessionRepository.init)
+        self.memoryStore = MemoryStore(repository: sessionDatabase.map(LocalMemoryRepository.init) ?? UnavailableMemoryRepository())
         let responseCache: any ResponseCaching = (try? MacBrainDatabase()).map(LocalResponseCache.init) ?? InMemoryResponseCache()
         let streamingResponder = StreamingChatResponder(
             provider: configuredInferenceStore.provider,
             repository: sourceLibrary.repository,
             selectedModel: { configuredInferenceStore.selectedChatModel },
+            selectedEmbeddingModel: { configuredInferenceStore.selectedEmbeddingModel },
             fallback: LocalKnowledgeResponder(repository: sourceLibrary.repository)
         )
         self.chatStore = ChatStore(
@@ -59,6 +63,7 @@ final class AppCoordinator {
             NSApp.activate(ignoringOtherApps: true)
             await sourceLibrary.reload()
             await chatStore.restorePersistedSessions()
+            await memoryStore.reload()
             await inferenceStore.refresh()
             await sourceLibrary.processQueuedIndexing(
                 using: inferenceStore.provider,

@@ -19,7 +19,7 @@ enum MacBrainDatabaseError: LocalizedError, Equatable, Sendable {
 }
 
 actor MacBrainDatabase: VectorStore {
-    static let currentSchemaVersion = 7
+    static let currentSchemaVersion = 8
 
     private let connection: SQLiteConnection
     private(set) var schemaVersion = 0
@@ -264,6 +264,28 @@ actor MacBrainDatabase: VectorStore {
         }
     }
 
+    /// Returns a small, secondary evidence set that shares an extracted entity with direct matches.
+    /// Direct FTS/vector candidates remain primary; this becomes useful after graph extraction runs.
+    func graphRelatedChunks(to chunkIDs: [UUID], limit: Int = 4) throws -> [StoredChunk] {
+        try ensureMigrated()
+        guard !chunkIDs.isEmpty else { return [] }
+        let placeholders = Array(repeating: "?", count: chunkIDs.count).joined(separator: ",")
+        let rows = try connection.rows(
+            """
+            SELECT DISTINCT c.id, c.document_id, c.source_id, c.text, c.start_offset, c.end_offset, c.page_number, c.line_start, c.line_end
+            FROM mentions seed
+            JOIN mentions related ON related.entity_id = seed.entity_id
+            JOIN chunks c ON c.id = related.chunk_id
+            JOIN documents d ON d.id = c.document_id
+            WHERE seed.chunk_id IN (\(placeholders))
+              AND c.is_deleted = 0 AND d.is_deleted = 0
+            LIMIT ?
+            """,
+            chunkIDs.map { .text($0.uuidString) } + [.integer(limit)]
+        )
+        return try rows.map(StoredChunk.init(row:))
+    }
+
     func remove(chunkID: UUID) throws {
         try ensureMigrated()
         try connection.transaction {
@@ -278,11 +300,11 @@ actor MacBrainDatabase: VectorStore {
         try connection.transaction {
             try connection.execute(
                 """
-                INSERT INTO conversations(id, title, greeting, created_at, updated_at, is_archived, is_pinned)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET title = excluded.title, greeting = excluded.greeting, updated_at = excluded.updated_at, is_archived = excluded.is_archived, is_pinned = excluded.is_pinned
+                INSERT INTO conversations(id, title, greeting, model_identifier, created_at, updated_at, is_archived, is_pinned)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET title = excluded.title, greeting = excluded.greeting, model_identifier = excluded.model_identifier, updated_at = excluded.updated_at, is_archived = excluded.is_archived, is_pinned = excluded.is_pinned
                 """,
-                [.text(conversation.id.uuidString), .text(conversation.title), .text(conversation.greeting), .double(conversation.createdAt.timeIntervalSince1970), .double(conversation.updatedAt.timeIntervalSince1970), .integer(conversation.isArchived ? 1 : 0), .integer(conversation.isPinned ? 1 : 0)]
+                [.text(conversation.id.uuidString), .text(conversation.title), .text(conversation.greeting), .text(conversation.modelIdentifier), .double(conversation.createdAt.timeIntervalSince1970), .double(conversation.updatedAt.timeIntervalSince1970), .integer(conversation.isArchived ? 1 : 0), .integer(conversation.isPinned ? 1 : 0)]
             )
             try connection.execute("DELETE FROM messages WHERE conversation_id = ?", [.text(conversation.id.uuidString)])
             for message in messages {
@@ -293,13 +315,13 @@ actor MacBrainDatabase: VectorStore {
 
     func conversation(id: UUID) throws -> StoredConversation? {
         try ensureMigrated()
-        guard let row = try connection.row("SELECT id, title, greeting, created_at, updated_at, is_archived, is_pinned FROM conversations WHERE id = ?", [.text(id.uuidString)]) else { return nil }
+        guard let row = try connection.row("SELECT id, title, greeting, model_identifier, created_at, updated_at, is_archived, is_pinned FROM conversations WHERE id = ?", [.text(id.uuidString)]) else { return nil }
         return try StoredConversation(row: row)
     }
 
     func conversations() throws -> [StoredConversation] {
         try ensureMigrated()
-        return try connection.rows("SELECT id, title, greeting, created_at, updated_at, is_archived, is_pinned FROM conversations ORDER BY updated_at DESC").map(StoredConversation.init(row:))
+        return try connection.rows("SELECT id, title, greeting, model_identifier, created_at, updated_at, is_archived, is_pinned FROM conversations ORDER BY updated_at DESC").map(StoredConversation.init(row:))
     }
 
     func messages(conversationID: UUID) throws -> [StoredMessage] {
@@ -365,6 +387,16 @@ actor MacBrainDatabase: VectorStore {
         return try connection.rows("SELECT id, owner_id, text, created_at, updated_at FROM memories WHERE owner_id = ? ORDER BY created_at", [.text(ownerID)]).map {
             StoredMemory(id: try $0.uuid("id"), ownerID: try $0.text("owner_id"), text: try $0.text("text"), createdAt: try $0.date("created_at"), updatedAt: try $0.date("updated_at"))
         }
+    }
+
+    func remove(memoryID: UUID) throws {
+        try ensureMigrated()
+        try connection.execute("DELETE FROM memories WHERE id = ?", [.text(memoryID.uuidString)])
+    }
+
+    func removeAllMemories(ownerID: String) throws {
+        try ensureMigrated()
+        try connection.execute("DELETE FROM memories WHERE owner_id = ?", [.text(ownerID)])
     }
 
     func replaceGraph(for sourceID: UUID, entities: [StoredEntity], aliases: [String: UUID], mentions: [StoredMention], relationships: [StoredRelationship]) throws {
@@ -442,8 +474,8 @@ actor MacBrainDatabase: VectorStore {
 
     private func insert(_ conversation: StoredConversation) throws {
         try connection.execute(
-            "INSERT INTO conversations(id, title, greeting, created_at, updated_at, is_archived, is_pinned) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [.text(conversation.id.uuidString), .text(conversation.title), .text(conversation.greeting), .double(conversation.createdAt.timeIntervalSince1970), .double(conversation.updatedAt.timeIntervalSince1970), .integer(conversation.isArchived ? 1 : 0), .integer(conversation.isPinned ? 1 : 0)]
+            "INSERT INTO conversations(id, title, greeting, model_identifier, created_at, updated_at, is_archived, is_pinned) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [.text(conversation.id.uuidString), .text(conversation.title), .text(conversation.greeting), .text(conversation.modelIdentifier), .double(conversation.createdAt.timeIntervalSince1970), .double(conversation.updatedAt.timeIntervalSince1970), .integer(conversation.isArchived ? 1 : 0), .integer(conversation.isPinned ? 1 : 0)]
         )
     }
 
@@ -533,6 +565,9 @@ private let migrations: [DatabaseMigration] = [
     DatabaseMigration(version: 7, statements: [
         "DELETE FROM chunks_fts",
         "INSERT INTO chunks_fts(chunk_id, normalized_text) SELECT c.id, lower(d.title || ' ' || d.source_label || ' ' || d.external_id || ' ' || CAST(d.metadata AS TEXT) || ' ' || c.text) FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.is_deleted = 0 AND d.is_deleted = 0"
+    ])
+    , DatabaseMigration(version: 8, statements: [
+        "ALTER TABLE conversations ADD COLUMN model_identifier TEXT NOT NULL DEFAULT 'local'"
     ])
 ]
 
@@ -730,7 +765,7 @@ private extension IndexingJob {
 
 private extension StoredConversation {
     init(row: SQLiteRow) throws {
-        self.init(id: try row.uuid("id"), title: try row.text("title"), greeting: try row.text("greeting"), createdAt: try row.date("created_at"), updatedAt: try row.date("updated_at"), isArchived: try row.integer("is_archived") != 0, isPinned: try row.integer("is_pinned") != 0)
+        self.init(id: try row.uuid("id"), title: try row.text("title"), greeting: try row.text("greeting"), modelIdentifier: try row.text("model_identifier"), createdAt: try row.date("created_at"), updatedAt: try row.date("updated_at"), isArchived: try row.integer("is_archived") != 0, isPinned: try row.integer("is_pinned") != 0)
     }
 }
 

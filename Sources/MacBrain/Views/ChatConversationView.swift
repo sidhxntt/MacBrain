@@ -27,7 +27,10 @@ struct ChatConversationView: View {
             ScrollView {
                 LazyVStack(spacing: 14) {
                     ForEach(store.messages) { message in
-                        ChatMessageBubble(message: message)
+                        ChatMessageBubble(
+                            message: message,
+                            onRetry: message.role == .assistant ? { store.retryLastResponse() } : nil
+                        )
                             .id(message.id)
                     }
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct AssistantMessageContent: View {
     let source: String
@@ -28,6 +29,27 @@ struct AssistantMessageContent: View {
                     Text(ChatMarkdownRenderer.render(text))
                         .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+            ForEach(ChatCitationCard.parse(from: source)) { citation in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "doc.text")
+                        .foregroundStyle(.tint)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("[\(citation.citationID)] \(citation.title)")
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(2)
+                        Button("Open source", systemImage: "arrow.up.forward.app") {
+                            NSWorkspace.shared.open(citation.url)
+                        }
+                        .font(.caption)
+                        .buttonStyle(.borderless)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(8)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Source \(citation.citationID): \(citation.title)")
             }
         }
         .textSelection(.enabled)

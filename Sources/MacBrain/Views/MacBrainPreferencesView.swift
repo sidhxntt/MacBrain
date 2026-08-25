@@ -3,6 +3,7 @@ import SwiftUI
 struct MacBrainPreferencesView: View {
     let coordinator: AppCoordinator
     @State private var isSourceManagerPresented = false
+    @State private var isMemoryManagerPresented = false
 
     var body: some View {
         Form {
@@ -24,6 +25,15 @@ struct MacBrainPreferencesView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Memories") {
+                Button("Manage Saved Memories", systemImage: "brain.head.profile") {
+                    isMemoryManagerPresented = true
+                }
+                Text("Memories are saved only when you explicitly choose to save them.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Local AI") {
                 OllamaSetupView(store: coordinator.inferenceStore)
             }
@@ -33,6 +43,9 @@ struct MacBrainPreferencesView: View {
         .navigationTitle("Settings")
         .sheet(isPresented: $isSourceManagerPresented) {
             SourceManagerView(store: coordinator.sourceLibrary)
+        }
+        .sheet(isPresented: $isMemoryManagerPresented) {
+            MemoryManagerView(store: coordinator.memoryStore)
         }
     }
 }

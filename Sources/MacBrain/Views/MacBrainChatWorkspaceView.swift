@@ -7,6 +7,7 @@ struct MacBrainChatWorkspaceView: View {
     @State private var isRenamingHeader = false
     @State private var headerTitleDraft = ""
     @FocusState private var isHeaderTitleFocused: Bool
+    @State private var isClearConfirmationPresented = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,7 +21,7 @@ struct MacBrainChatWorkspaceView: View {
 
             ChatComposer(
                 store: chatStore,
-                onClear: chatStore.clear,
+                onClear: { isClearConfirmationPresented = true },
                 onManageSources: { isSourceManagerPresented = true }
             )
         }
@@ -51,6 +52,11 @@ struct MacBrainChatWorkspaceView: View {
         .sheet(isPresented: $isSourceManagerPresented) {
             SourceManagerView(store: sourceLibrary)
         }
+        .confirmationDialog("Clear this conversation?", isPresented: $isClearConfirmationPresented, titleVisibility: .visible) {
+            Button("Clear conversation", role: .destructive) {
+                withAnimation(.easeInOut(duration: 0.30)) { chatStore.clear() }
+            }
+        } message: { Text("Messages in this open chat will be removed. This cannot be undone.") }
     }
 
     private func beginHeaderRename() {

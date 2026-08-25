@@ -5,7 +5,7 @@ TEST_ENV := CLANG_MODULE_CACHE_PATH=/tmp/macbrain-clang-cache SWIFTPM_CACHE_PATH
 PERMISSION_RESET ?= 0
 
 .DEFAULT_GOAL := help
-.PHONY: help start stop stop-permissions-reset permission-reset restart build test verify status logs telemetry
+.PHONY: help start stop stop-permissions-reset permission-reset restart build release release-check test verify status logs telemetry
 
 help:
 	@echo "MacBrain commands:"
@@ -15,6 +15,8 @@ help:
 	@echo "  make stop-permissions-reset    Alias for the permission-reset stop command"
 	@echo "  make restart    Close, rebuild, and relaunch MacBrain"
 	@echo "  make build      Build the .app bundle without launching"
+	@echo "  make release SIGNING_IDENTITY='Developer ID Application: …'  Build and sign a beta bundle"
+	@echo "  make release-check  Validate a signed bundle and privacy declarations"
 	@echo "  make test       Run the Swift test suite"
 	@echo "  make verify     Build, launch, and verify the process"
 	@echo "  make status     Show whether MacBrain is running"
@@ -46,6 +48,12 @@ restart: stop start
 
 build:
 	bash $(BUILD_SCRIPT) --bundle
+
+release:
+	bash $(BUILD_SCRIPT) --release
+
+release-check:
+	bash script/release_check.sh dist/$(APP_NAME).app
 
 test:
 	env $(TEST_ENV) swift test --disable-sandbox

@@ -31,13 +31,13 @@ struct OllamaClient: Sendable {
     private let firstTokenTimeout: Duration
 
     init(
-        baseURL: URL = URL(string: "http://127.0.0.1:11434")!,
+        baseURL: URL = LocalInferenceEndpoint.defaultURL,
         session: URLSession = .shared,
         retryLimit: Int = 2,
         retryDelay: Duration = .milliseconds(250),
         firstTokenTimeout: Duration = .seconds(15)
     ) {
-        self.baseURL = baseURL
+        self.baseURL = LocalInferenceEndpoint.resolvedURL(for: baseURL)
         self.session = session
         self.retryLimit = max(0, retryLimit)
         self.retryDelay = retryDelay

@@ -33,13 +33,15 @@ actor LocalSourceRepository {
     }
 
     private let fileURL: URL
+    private let database: MacBrainDatabase?
     private var snapshot: Snapshot
 
-    init(fileURL: URL? = nil) {
+    init(fileURL: URL? = nil, database: MacBrainDatabase? = nil) {
         let defaultURL = Self.defaultFileURL()
         let resolvedURL = fileURL ?? defaultURL
         let loadedSnapshot = Self.load(from: resolvedURL)
         self.fileURL = resolvedURL
+        self.database = database ?? (fileURL == nil ? try? MacBrainDatabase() : nil)
 
         if loadedSnapshot.schemaVersion < 1 {
             // Versions before explicit connector consent may contain sources
@@ -72,42 +74,82 @@ actor LocalSourceRepository {
         snapshot.records.first { $0.id == id }
     }
 
-    func save(_ record: ConnectorRecord) throws {
+    func save(_ record: ConnectorRecord) async throws {
         if let index = snapshot.records.firstIndex(where: { $0.id == record.id }) {
             snapshot.records[index] = record
         } else {
             snapshot.records.append(record)
         }
         try persist()
+        if let database {
+            try await database.save(connectorRecord: record)
+        }
     }
 
-    func replaceDocuments(for connectorID: UUID, with documents: [ConnectorDocument]) throws -> Int {
+    func replaceDocuments(for connectorID: UUID, with documents: [ConnectorDocument]) async throws -> Int {
         var seen = Set<String>()
         let uniqueDocuments = documents.filter { seen.insert($0.externalID + $0.contentHash).inserted }
+        let existingDocuments = snapshot.documents.filter { $0.connectorID == connectorID }
+        let existingByExternalID = Dictionary(uniqueKeysWithValues: existingDocuments.map { ($0.externalID, $0) })
+        let cachedDocuments = uniqueDocuments.map { incoming in
+            guard let existing = existingByExternalID[incoming.externalID], existing.matchesCacheEntry(for: incoming) else {
+                return incoming
+            }
+            return existing
+        }
+        let changed = existingDocuments.count != cachedDocuments.count
+            || zip(existingDocuments.sorted(by: { $0.externalID < $1.externalID }), cachedDocuments.sorted(by: { $0.externalID < $1.externalID })).contains {
+                $0.externalID != $1.externalID || !$0.matchesCacheEntry(for: $1)
+            }
+        guard changed else { return existingDocuments.count }
+
         snapshot.documents.removeAll { $0.connectorID == connectorID }
-        snapshot.documents.append(contentsOf: uniqueDocuments)
+        snapshot.documents.append(contentsOf: cachedDocuments)
         try persist()
-        return uniqueDocuments.count
+        if let database {
+            try await database.replaceSourceDocuments(sourceID: connectorID, documents: snapshot.documents.filter { $0.connectorID == connectorID }.map(StoredDocument.init))
+        }
+        return cachedDocuments.count
     }
 
-    func mergeDocuments(for connectorID: UUID, with documents: [ConnectorDocument]) throws -> Int {
+    func mergeDocuments(for connectorID: UUID, with documents: [ConnectorDocument]) async throws -> Int {
         var documentsByExternalID: [String: ConnectorDocument] = [:]
         for document in documents {
             documentsByExternalID[document.externalID] = document
         }
+        let existingByExternalID = Dictionary(
+            uniqueKeysWithValues: snapshot.documents.filter { $0.connectorID == connectorID }.map { ($0.externalID, $0) }
+        )
         let incomingIDs = Set(documentsByExternalID.keys)
+        let cachedDocuments = documentsByExternalID.values.map { incoming in
+            guard let existing = existingByExternalID[incoming.externalID], existing.matchesCacheEntry(for: incoming) else {
+                return incoming
+            }
+            return existing
+        }
+        let changed = cachedDocuments.contains { incoming in
+            guard let existing = existingByExternalID[incoming.externalID] else { return true }
+            return !existing.matchesCacheEntry(for: incoming)
+        }
+        guard changed else { return documentCount(for: connectorID) }
         snapshot.documents.removeAll {
             $0.connectorID == connectorID && incomingIDs.contains($0.externalID)
         }
-        snapshot.documents.append(contentsOf: documentsByExternalID.values)
+        snapshot.documents.append(contentsOf: cachedDocuments)
         try persist()
+        if let database {
+            try await database.replaceSourceDocuments(sourceID: connectorID, documents: snapshot.documents.filter { $0.connectorID == connectorID }.map(StoredDocument.init))
+        }
         return documentCount(for: connectorID)
     }
 
-    func remove(id: UUID) throws {
+    func remove(id: UUID) async throws {
         snapshot.records.removeAll { $0.id == id }
         snapshot.documents.removeAll { $0.connectorID == id }
         try persist()
+        if let database {
+            try await database.remove(sourceID: id)
+        }
     }
 
     func search(_ query: String, limit: Int = 5) -> [ConnectorDocument] {
@@ -179,5 +221,29 @@ private extension JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder
+    }
+}
+
+private extension StoredDocument {
+    init(_ document: ConnectorDocument) {
+        self.init(
+            id: document.id,
+            sourceID: document.connectorID,
+            externalID: document.externalID,
+            title: document.title,
+            text: document.text,
+            sourceLabel: document.sourceLabel,
+            createdAt: document.createdAt,
+            modifiedAt: document.modifiedAt,
+            metadata: document.metadata
+        )
+    }
+}
+
+private extension ConnectorDocument {
+    func matchesCacheEntry(for incoming: ConnectorDocument) -> Bool {
+        contentHash == incoming.contentHash
+            && modifiedAt == incoming.modifiedAt
+            && metadata == incoming.metadata
     }
 }

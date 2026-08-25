@@ -15,15 +15,18 @@ final class ChatStore: ObservableObject {
 
     private let responder: any ChatResponder
     private let greetingProvider: () -> String
+    private let sessionRepository: LocalChatSessionRepository?
 
     init(
         responder: any ChatResponder = LocalMockChatResponder(),
-        greetingProvider: @escaping () -> String = { MacBrainGreeting.random() }
+        greetingProvider: @escaping () -> String = { MacBrainGreeting.random() },
+        sessionRepository: LocalChatSessionRepository? = nil
     ) {
         let initialGreeting = greetingProvider()
         let initialSession = ChatSession(messages: [], greeting: initialGreeting)
         self.responder = responder
         self.greetingProvider = greetingProvider
+        self.sessionRepository = sessionRepository
         self.openSessions = [initialSession]
         self.activeSessionID = initialSession.id
         self.welcomeGreeting = initialGreeting
@@ -113,6 +116,7 @@ final class ChatStore: ObservableObject {
 
     func clearHistory() {
         archivedSessions.removeAll()
+        persistSessions()
     }
 
     var sidebarSessions: [ChatSession] {
@@ -137,6 +141,7 @@ final class ChatStore: ObservableObject {
         } else {
             pinnedSessionIDs.insert(session.id)
         }
+        persistSessions()
     }
 
     func renameCurrentChat(to proposedTitle: String) {
@@ -161,6 +166,24 @@ final class ChatStore: ObservableObject {
         if activeSessionID == session.id {
             currentTitle = title
         }
+        persistSessions()
+    }
+
+    func restorePersistedSessions() async {
+        guard let sessionRepository else { return }
+        do {
+            let restored = try await sessionRepository.load()
+            guard !restored.open.isEmpty || !restored.archived.isEmpty else { return }
+
+            openSessions = restored.open.isEmpty
+                ? [ChatSession(messages: [], greeting: greetingProvider())]
+                : restored.open
+            archivedSessions = restored.archived
+            pinnedSessionIDs = restored.pinnedSessionIDs
+            activate(openSessions[0])
+        } catch {
+            // Local chat persistence should never prevent the app opening.
+        }
     }
 
     private func activate(_ session: ChatSession) {
@@ -180,6 +203,17 @@ final class ChatStore: ObservableObject {
             messages: messages,
             greeting: welcomeGreeting
         )
+        persistSessions()
+    }
+
+    private func persistSessions() {
+        guard let sessionRepository else { return }
+        let open = openSessions
+        let archived = archivedSessions
+        let pinned = pinnedSessionIDs
+        Task {
+            try? await sessionRepository.replace(open: open, archived: archived, pinnedSessionIDs: pinned)
+        }
     }
 }
 

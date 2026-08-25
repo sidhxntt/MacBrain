@@ -114,6 +114,25 @@ final class SourceConnectorTests: XCTestCase {
         XCTAssertEqual(storedCount, 2)
     }
 
+    func testAutomaticRefreshSkipsRecentlySyncedSource() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryStoreURL())
+        let connector = CountingConnector(kind: .folder)
+        let coordinator = LocalSourceCoordinator(repository: repository, connectors: [connector])
+        let record = ConnectorRecord(
+            kind: .folder,
+            displayName: "Work",
+            configuration: .init(),
+            lastSuccessfulSync: .now
+        )
+        try await repository.save(record)
+
+        let store = await MainActor.run { SourceLibraryStore(repository: repository, coordinator: coordinator) }
+        await store.refreshConnectedSourcesIfDue(referenceDate: Date.now)
+
+        let syncCount = await connector.syncCount()
+        XCTAssertEqual(syncCount, 0)
+    }
+
     func testSourceConfigurationDecodesLegacyDataWithoutBatchFields() throws {
         let data = Data("{\"accountName\":\"Personal\"}".utf8)
 
@@ -721,6 +740,22 @@ private struct DelayedConnector: SourceConnector {
         try await Task.sleep(for: .milliseconds(300))
         return []
     }
+}
+
+private actor CountingConnector: SourceConnector {
+    let kind: SourceConnectorKind
+    private var count = 0
+
+    init(kind: SourceConnectorKind) {
+        self.kind = kind
+    }
+
+    func sync(record: ConnectorRecord) async throws -> [ConnectorDocument] {
+        count += 1
+        return []
+    }
+
+    func syncCount() -> Int { count }
 }
 
 private struct DeniedNotesConnector: SourceConnector {

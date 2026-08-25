@@ -2,8 +2,8 @@ import XCTest
 @testable import MacBrain
 
 final class ChatHoverPreviewPolicyTests: XCTestCase {
-    func testShowsPreviewOnlyForTruncatedTitles() {
-        XCTAssertFalse(ChatHoverPreviewPolicy.shouldShowPreview(for: "Short title"))
+    func testShowsPreviewForEveryChatTitle() {
+        XCTAssertTrue(ChatHoverPreviewPolicy.shouldShowPreview(for: "Short title"))
         XCTAssertTrue(ChatHoverPreviewPolicy.shouldShowPreview(for: String(repeating: "Long title ", count: 8)))
     }
 

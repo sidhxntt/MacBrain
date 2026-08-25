@@ -40,7 +40,7 @@ final class SourceLibraryStore: ObservableObject {
             guard let self else { return }
             await self.coordinator.recoverInterruptedSyncs()
             await self.reload()
-            await self.refreshConnectedSourcesNow()
+            await self.refreshConnectedSourcesIfDue()
 
             while !Task.isCancelled {
                 self.nextAutomaticRefresh = .now.addingTimeInterval(300)
@@ -50,7 +50,7 @@ final class SourceLibraryStore: ObservableObject {
                     return
                 }
                 guard !Task.isCancelled else { return }
-                await self.refreshConnectedSourcesNow()
+                await self.refreshConnectedSourcesIfDue()
             }
         }
     }
@@ -64,6 +64,20 @@ final class SourceLibraryStore: ObservableObject {
     func refreshConnectedSourcesNow() async {
         await reload()
         let candidates = records.filter { $0.status == .ready && !syncingRecordIDs.contains($0.id) }
+        for record in candidates {
+            guard !Task.isCancelled else { return }
+            await refreshAutomatically(record)
+        }
+    }
+
+    func refreshConnectedSourcesIfDue(referenceDate: Date = .now) async {
+        await reload()
+        let refreshInterval = Self.automaticRefreshInterval.components.seconds
+        let candidates = records.filter { record in
+            guard record.status == .ready, !syncingRecordIDs.contains(record.id) else { return false }
+            guard let lastSuccessfulSync = record.lastSuccessfulSync else { return true }
+            return referenceDate.timeIntervalSince(lastSuccessfulSync) >= Double(refreshInterval)
+        }
         for record in candidates {
             guard !Task.isCancelled else { return }
             await refreshAutomatically(record)

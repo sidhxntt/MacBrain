@@ -16,6 +16,7 @@ final class ChatStore: ObservableObject {
     private let responder: any ChatResponder
     private let greetingProvider: () -> String
     private let sessionRepository: LocalChatSessionRepository?
+    private var sendingTask: Task<Void, Never>?
 
     init(
         responder: any ChatResponder = LocalMockChatResponder(),
@@ -47,19 +48,53 @@ final class ChatStore: ObservableObject {
         isSending = true
         defer { isSending = false }
 
+        var streamedText = ""
+        var streamedMessageID: UUID?
         do {
-            let response = try await responder.respond(to: prompt)
-            messages.append(ChatMessage(role: .assistant, text: response))
-            synchronizeCurrentSession()
+            for try await token in responder.stream(to: prompt) {
+                try Task.checkCancellation()
+                streamedText.append(token)
+                if let streamedMessageID, let index = messages.firstIndex(where: { $0.id == streamedMessageID }) {
+                    let message = messages[index]
+                    messages[index] = ChatMessage(id: message.id, role: .assistant, text: streamedText, createdAt: message.createdAt)
+                } else {
+                    let message = ChatMessage(role: .assistant, text: streamedText)
+                    streamedMessageID = message.id
+                    messages.append(message)
+                }
+                synchronizeCurrentSession()
+            }
+        } catch is CancellationError {
+            // Preserve already-streamed text; cancellation is an expected local action.
+        } catch let error as OllamaClientError where error == .cancelled {
+            // Preserve already-streamed text; cancellation is an expected local action.
         } catch {
-            messages.append(
-                ChatMessage(
-                    role: .assistant,
-                    text: "I couldn't complete that local response. Please try again."
+            if streamedText.isEmpty {
+                messages.append(
+                    ChatMessage(
+                        role: .assistant,
+                        text: "I couldn't complete that local response. Check Ollama in Settings, then try again."
+                    )
                 )
-            )
+            }
             synchronizeCurrentSession()
         }
+    }
+
+    func startSendingDraft() {
+        guard sendingTask == nil else { return }
+        sendingTask = Task { [weak self] in
+            guard let self else { return }
+            await self.sendDraft()
+            self.sendingTask = nil
+        }
+    }
+
+    func cancelSending() {
+        sendingTask?.cancel()
+        sendingTask = nil
+        isSending = false
+        synchronizeCurrentSession()
     }
 
     func clear() {

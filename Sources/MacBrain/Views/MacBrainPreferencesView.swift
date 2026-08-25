@@ -23,6 +23,10 @@ struct MacBrainPreferencesView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Section("Local AI") {
+                OllamaSetupView(store: coordinator.inferenceStore)
+            }
         }
         .formStyle(.grouped)
         .padding(20)

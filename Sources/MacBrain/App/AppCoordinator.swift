@@ -13,8 +13,10 @@ final class AppCoordinator {
 
     init(sourceLibrary: SourceLibraryStore = SourceLibraryStore()) {
         self.sourceLibrary = sourceLibrary
+        let sessionRepository = (try? MacBrainDatabase()).map(LocalChatSessionRepository.init)
         self.chatStore = ChatStore(
-            responder: LocalKnowledgeResponder(repository: sourceLibrary.repository)
+            responder: LocalKnowledgeResponder(repository: sourceLibrary.repository),
+            sessionRepository: sessionRepository
         )
     }
 
@@ -38,6 +40,7 @@ final class AppCoordinator {
             await Task.yield()
             NSApp.activate(ignoringOtherApps: true)
             await sourceLibrary.reload()
+            await chatStore.restorePersistedSessions()
             sourceLibrary.startAutomaticRefresh()
         }
     }

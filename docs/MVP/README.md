@@ -1,4 +1,4 @@
-# Notch Brain MVP Execution
+# MacBrain MVP Execution
 
 This folder contains the phase-by-phase execution plan for the MVP. Build and verify one phase at a time; do not start the next phase until the current phase’s exit criteria pass.
 

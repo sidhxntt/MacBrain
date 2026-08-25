@@ -4,7 +4,7 @@ enum ChatHoverPreviewPolicy {
     static let titleCharacterLimit = 36
 
     static func shouldShowPreview(for title: String) -> Bool {
-        title.count > titleCharacterLimit
+        true
     }
 
     static func shouldAutoScrollTitle(for title: String) -> Bool {

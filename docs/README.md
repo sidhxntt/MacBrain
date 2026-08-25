@@ -12,7 +12,7 @@ Documentation path in this workspace: `docs/`
 4. [Model support](./model-support.md) — Ollama MVP behavior, hardware limits, and future inference backends.
 5. [MVP execution](./MVP/README.md) — the ordered ten-phase build plan.
 6. [Beta metrics](./beta-metrics.md) — measurable validation and release gates.
-7. [Notch Brain and Siri AI](./siri-ai-comparison.md) — product positioning and scope comparison.
+7. [MacBrain and Siri AI](./siri-ai-comparison.md) — product positioning and scope comparison.
 8. [Post-MVP roadmap](./superpowers/plans/2026-08-23-notch-brain-post-mvp.md) — future work, not MVP requirements.
 
 ## Relative MVP difficulty
@@ -64,7 +64,7 @@ All data stays on the Mac by default. No hosted model or silent whole-disk index
 - [Privacy](./privacy.md)
 - [Model support](./model-support.md)
 - [Beta metrics](./beta-metrics.md)
-- [Notch Brain and Siri AI](./siri-ai-comparison.md)
+- [MacBrain and Siri AI](./siri-ai-comparison.md)
 - [MVP phase index](./MVP/README.md)
 - [MVP phases 01–10](./MVP/01-app-shell.md)
 - [MVP implementation plan](./superpowers/plans/2026-08-23-notch-brain.md)

@@ -11,6 +11,7 @@ let package = Package(
         .executableTarget(
             name: "MacBrain",
             linkerSettings: [
+                .linkedLibrary("sqlite3"),
                 .linkedFramework("EventKit"),
                 .linkedFramework("Contacts"),
                 .linkedFramework("Photos"),

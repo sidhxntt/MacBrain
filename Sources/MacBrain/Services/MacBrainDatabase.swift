@@ -367,6 +367,16 @@ actor MacBrainDatabase: VectorStore {
         }
     }
 
+    func remove(memoryID: UUID) throws {
+        try ensureMigrated()
+        try connection.execute("DELETE FROM memories WHERE id = ?", [.text(memoryID.uuidString)])
+    }
+
+    func removeAllMemories(ownerID: String) throws {
+        try ensureMigrated()
+        try connection.execute("DELETE FROM memories WHERE owner_id = ?", [.text(ownerID)])
+    }
+
     func replaceGraph(for sourceID: UUID, entities: [StoredEntity], aliases: [String: UUID], mentions: [StoredMention], relationships: [StoredRelationship]) throws {
         try ensureMigrated()
         try connection.transaction {

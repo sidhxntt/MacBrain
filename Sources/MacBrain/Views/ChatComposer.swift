@@ -38,7 +38,7 @@ struct ChatComposer: View {
                     Spacer()
 
                     if !store.messages.isEmpty {
-                        Button("Clear conversation", systemImage: "trash", action: clearConversation)
+                        Button("Clear conversation", systemImage: "trash", action: onClear)
                             .labelStyle(.iconOnly)
                             .buttonStyle(.plain)
                             .foregroundStyle(.secondary)
@@ -89,10 +89,4 @@ struct ChatComposer: View {
         store.startSendingDraft()
     }
 
-    private func clearConversation() {
-        withAnimation(.easeInOut(duration: 0.30)) {
-            onClear()
-        }
-        isFocused = true
-    }
 }

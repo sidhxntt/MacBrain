@@ -133,6 +133,14 @@ final class ChatStore: ObservableObject {
         synchronizeCurrentSession()
     }
 
+    func retryLastResponse() {
+        guard !isSending, let userIndex = messages.lastIndex(where: { $0.role == .user }) else { return }
+        messages.removeSubrange((userIndex + 1)..<messages.count)
+        draft = messages[userIndex].text
+        synchronizeCurrentSession()
+        startSendingDraft()
+    }
+
     func startNewChat() {
         synchronizeCurrentSession()
         let newSession = ChatSession(messages: [], greeting: greetingProvider())

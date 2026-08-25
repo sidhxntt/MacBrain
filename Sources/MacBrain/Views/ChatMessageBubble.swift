@@ -1,7 +1,9 @@
+import AppKit
 import SwiftUI
 
 struct ChatMessageBubble: View {
     let message: ChatMessage
+    var onRetry: (() -> Void)?
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
@@ -28,6 +30,18 @@ struct ChatMessageBubble: View {
                     role: message.role == .user ? .userMessage : .assistantMessage,
                     in: RoundedRectangle(cornerRadius: 16)
                 )
+                if message.role == .assistant {
+                    HStack(spacing: 10) {
+                        Button("Copy", systemImage: "doc.on.doc") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(message.text, forType: .string)
+                        }
+                        if let onRetry { Button("Retry", systemImage: "arrow.clockwise", action: onRetry) }
+                    }
+                    .font(.caption)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                }
             }
 
             if message.role == .assistant { Spacer(minLength: 34) }

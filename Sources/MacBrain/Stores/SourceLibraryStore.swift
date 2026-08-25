@@ -22,7 +22,11 @@ final class SourceLibraryStore: ObservableObject {
         browserProfileCatalog: BrowserProfileCatalog = BrowserProfileCatalog()
     ) {
         self.repository = repository
-        self.coordinator = coordinator ?? LocalSourceCoordinator(repository: repository)
+        let jobs = try? MacBrainDatabase()
+        self.coordinator = coordinator ?? LocalSourceCoordinator(
+            repository: repository,
+            indexingJobs: jobs.map(IndexingJobCoordinator.init)
+        )
         self.browserProfileCatalog = browserProfileCatalog
     }
 
@@ -34,8 +38,13 @@ final class SourceLibraryStore: ObservableObject {
         records = await coordinator.records()
     }
 
+    func processQueuedIndexing(using provider: any InferenceProvider, embeddingModel: String) async {
+        await coordinator.processQueuedIndexing(using: provider, embeddingModel: embeddingModel)
+    }
+
     func startAutomaticRefresh() {
         automaticRefreshTask?.cancel()
+        nextAutomaticRefresh = .now.addingTimeInterval(300)
         automaticRefreshTask = Task { [weak self] in
             guard let self else { return }
             await self.coordinator.recoverInterruptedSyncs()
@@ -212,7 +221,20 @@ final class SourceLibraryStore: ObservableObject {
     }
 
     func delete(_ record: ConnectorRecord) {
-        perform(for: record.id) { try await self.coordinator.remove(id: record.id) }
+        // Deletion must never be blocked by an in-flight sync. The coordinator and
+        // repository prevent that sync from restoring this record after removal.
+        syncingRecordIDs.remove(record.id)
+        alertMessage = nil
+        records.removeAll { $0.id == record.id }
+
+        Task {
+            do {
+                try await self.coordinator.remove(id: record.id)
+            } catch {
+                self.alertMessage = error.localizedDescription
+            }
+            await self.reload()
+        }
     }
 
     private func perform(for recordID: UUID, _ operation: @escaping @Sendable () async throws -> Void) {

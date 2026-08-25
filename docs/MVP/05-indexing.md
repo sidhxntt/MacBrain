@@ -15,20 +15,22 @@ Index selected local knowledge sources safely, incrementally, and with citation-
 ## Implementation sequence
 
 - [x] Persist security-scoped bookmarks for selected folders.
-- [ ] Define a connector protocol returning normalized documents and source metadata.
-- [ ] Extract Markdown headings, titles, paths, dates, and offsets.
-- [ ] Extract PDF pages and preserve page numbers.
+- [x] Define a connector protocol returning normalized documents and source metadata.
+- [x] Extract Markdown headings, titles, paths, dates, and offsets.
+- [x] Extract PDF pages and preserve page numbers.
 - [x] Detect Git roots, index supported tracked files, and read branch/commit metadata.
-- [ ] Add exclusions for secrets, credentials, dependency folders, build outputs, and user-defined paths.
-- [ ] Hash content and skip unchanged files.
-- [ ] Chunk text deterministically with overlap and stable IDs.
-- [ ] Queue embeddings and graph extraction as cancellable background jobs.
-- [ ] Prune sources when files are deleted or moved.
-- [ ] Test malformed files, permission denial, duplicates, cancellation, restart recovery, and stale pruning.
+- [x] Add exclusions for dependency folders, build outputs, and user-defined paths. Hidden and secret files remain indexed unless the user excludes them.
+- [x] Fingerprint content and skip unchanged files.
+- [x] Chunk text deterministically with overlap and stable IDs.
+- [x] Persist cancellable embedding and graph-extraction background jobs for changed chunks. Graph extraction remains a no-op hook until Phase 7.
+- [x] Prune sources when files are deleted or moved (moves are represented as delete + add).
+- [x] Test malformed files, permission denial, duplicates, cancellation, restart recovery, and stale pruning.
 
 ## Exit criteria
 
-Users can select folders, see progress, re-index only changed content, remove deleted files from search, and inspect source metadata sufficient for exact citations.
+Users can select folders, see progress, re-index only changed content, remove deleted files from search, and inspect source metadata sufficient for exact citations. The current change detector polls connected sources every five minutes while MacBrain is open; lower-latency filesystem events are intentionally deferred.
+
+Changed file chunks enqueue durable local embedding work. Pending work is resumed after MacBrain has confirmed its configured local embedding model at launch; cancelled, failed, and completed job states remain persisted for inspection and recovery.
 
 ## Phase 2 connector implementation
 

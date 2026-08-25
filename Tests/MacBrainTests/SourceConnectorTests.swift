@@ -4,6 +4,23 @@ import Foundation
 import XCTest
 
 final class SourceConnectorTests: XCTestCase {
+    func testPDFPagesBecomeSeparatelyCitableDocuments() {
+        let root = URL(fileURLWithPath: "/tmp/work", isDirectory: true)
+        let documents = LocalFileIndexer.pdfDocuments(
+            pageTexts: ["First page evidence.", "Second page evidence."],
+            url: root.appendingPathComponent("report.pdf"),
+            relativePath: "report.pdf",
+            connectorID: UUID(),
+            sourceLabel: "Folder: Work",
+            createdAt: nil,
+            modifiedAt: nil
+        )
+
+        XCTAssertEqual(documents.count, 2)
+        XCTAssertEqual(documents.map { $0.metadata["pageNumber"] }, ["1", "2"])
+        XCTAssertEqual(documents.map(\.externalID), ["/tmp/work/report.pdf#page-1", "/tmp/work/report.pdf#page-2"])
+    }
+
     func testFolderIndexesSupportedFilesRecursivelyAndSkipsExcludedDirectories() async throws {
         let directory = try makeTemporaryDirectory()
         let nestedDirectory = directory.appendingPathComponent("Projects/Launch", isDirectory: true)
@@ -25,6 +42,52 @@ final class SourceConnectorTests: XCTestCase {
         let brief = try XCTUnwrap(documents.first { $0.metadata["relativePath"] == "Projects/Launch/brief.md" })
         XCTAssertEqual(brief.title, "Launch")
         XCTAssertTrue(documents.contains { $0.metadata["relativePath"] == "Makefile" })
+    }
+
+    func testFolderSyncPersistsFingerprintsForIncrementalRefresh() async throws {
+        let directory = try makeTemporaryDirectory()
+        try Data("# Brief\nInitial content".utf8).write(to: directory.appendingPathComponent("brief.md"))
+        let repository = LocalSourceRepository(fileURL: try temporaryStoreURL())
+        let coordinator = LocalSourceCoordinator(repository: repository, connectors: [FolderConnector()])
+        let record = try await coordinator.create(
+            kind: .folder,
+            displayName: "Work",
+            configuration: SourceConnectorConfiguration(localPath: directory.path)
+        )
+
+        let first = try await coordinator.sync(id: record.id)
+        XCTAssertEqual(first.configuration.fileFingerprints.count, 1)
+
+        let second = try await coordinator.sync(id: record.id)
+        XCTAssertEqual(second.configuration.fileFingerprints, first.configuration.fileFingerprints)
+        XCTAssertEqual(second.documentCount, 1)
+    }
+
+    func testFileBackedSyncQueuesOnlyChangedChunksForDownstreamIndexing() async throws {
+        let directory = try makeTemporaryDirectory()
+        try Data("# Brief\nIncremental indexing evidence".utf8).write(to: directory.appendingPathComponent("brief.md"))
+        let database = try MacBrainDatabase(url: try temporaryStoreURL())
+        let repository = LocalSourceRepository(fileURL: try temporaryStoreURL(), database: database)
+        let jobs = IndexingJobCoordinator(database: database)
+        let coordinator = LocalSourceCoordinator(
+            repository: repository,
+            indexingJobs: jobs,
+            connectors: [FolderConnector()]
+        )
+        let record = try await coordinator.create(
+            kind: .folder,
+            displayName: "Work",
+            configuration: SourceConnectorConfiguration(localPath: directory.path)
+        )
+
+        _ = try await coordinator.sync(id: record.id)
+        let firstJobs = try await database.indexingJobs(sourceID: record.id)
+        XCTAssertEqual(firstJobs.count, 2)
+        XCTAssertTrue(firstJobs.allSatisfy { !$0.chunkIDs.isEmpty })
+
+        _ = try await coordinator.sync(id: record.id)
+        let secondJobs = try await database.indexingJobs(sourceID: record.id)
+        XCTAssertEqual(secondJobs.count, 2)
     }
 
     func testFolderIndexesHiddenAndSecretFilesWhileSkippingDependencyAndBuildDirectories() async throws {
@@ -360,6 +423,20 @@ final class SourceConnectorTests: XCTestCase {
     }
 
     @MainActor
+    func testAutomaticRefreshPublishesTheNextRefreshImmediately() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryStoreURL())
+        let coordinator = LocalSourceCoordinator(repository: repository, connectors: [SingleDocumentConnector()])
+        let store = SourceLibraryStore(repository: repository, coordinator: coordinator)
+
+        store.startAutomaticRefresh()
+        defer { store.stopAutomaticRefresh() }
+
+        let nextRefresh = try XCTUnwrap(store.nextAutomaticRefresh)
+        XCTAssertGreaterThan(nextRefresh, .now)
+        XCTAssertLessThan(nextRefresh.timeIntervalSinceNow, 301)
+    }
+
+    @MainActor
     func testAutomaticRefreshRecordsAConciseActivityEntry() async throws {
         let repository = LocalSourceRepository(fileURL: try temporaryStoreURL())
         let coordinator = LocalSourceCoordinator(repository: repository, connectors: [SingleDocumentConnector()])
@@ -533,6 +610,78 @@ final class SourceConnectorTests: XCTestCase {
         let matchesAfterRemoval = await repository.search("decision")
         XCTAssertNil(removedRecord)
         XCTAssertTrue(matchesAfterRemoval.isEmpty)
+    }
+
+    func testRemovingAnySourceDuringSyncDoesNotRestoreIt() async throws {
+        for kind in SourceConnectorKind.userSelectableKinds {
+            let repository = LocalSourceRepository(fileURL: try temporaryStoreURL())
+            let coordinator = LocalSourceCoordinator(
+                repository: repository,
+                connectors: [DelayedConnector(kind: kind)]
+            )
+            let record = try await coordinator.create(
+                kind: kind,
+                displayName: kind.displayName,
+                configuration: SourceConnectorConfiguration()
+            )
+
+            let syncTask = Task { try await coordinator.sync(id: record.id) }
+            try await Task.sleep(for: .milliseconds(30))
+            try await coordinator.remove(id: record.id)
+            _ = try? await syncTask.value
+
+            let removedRecord = await repository.record(id: record.id)
+            XCTAssertNil(
+                removedRecord,
+                "\(kind.displayName) must remain deleted after an in-flight sync finishes."
+            )
+        }
+    }
+
+    func testPauseAndResumeWorkForEverySourceKind() async throws {
+        for kind in SourceConnectorKind.userSelectableKinds {
+            let repository = LocalSourceRepository(fileURL: try temporaryStoreURL())
+            let coordinator = LocalSourceCoordinator(
+                repository: repository,
+                connectors: [DelayedConnector(kind: kind)]
+            )
+            let record = try await coordinator.create(
+                kind: kind,
+                displayName: kind.displayName,
+                configuration: SourceConnectorConfiguration()
+            )
+
+            try await coordinator.pause(id: record.id)
+            let pausedRecord = await repository.record(id: record.id)
+            XCTAssertEqual(pausedRecord?.status, .paused)
+
+            try await coordinator.resume(id: record.id)
+            let resumedRecord = await repository.record(id: record.id)
+            XCTAssertEqual(resumedRecord?.status, .ready)
+        }
+    }
+
+    @MainActor
+    func testStoreDeleteWorksWhileSourceIsSyncing() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryStoreURL())
+        let coordinator = LocalSourceCoordinator(
+            repository: repository,
+            connectors: [DelayedConnector(kind: .folder)]
+        )
+        let store = SourceLibraryStore(repository: repository, coordinator: coordinator)
+        let record = try await coordinator.create(
+            kind: .folder,
+            displayName: "Project",
+            configuration: SourceConnectorConfiguration(localPath: "/tmp/project")
+        )
+
+        store.sync(record)
+        try await Task.sleep(for: .milliseconds(30))
+        store.delete(record)
+        try await Task.sleep(for: .milliseconds(350))
+        await store.reload()
+
+        XCTAssertFalse(store.records.contains { $0.id == record.id })
     }
 
     func testPausedConnectorDoesNotSyncUntilResumed() async throws {

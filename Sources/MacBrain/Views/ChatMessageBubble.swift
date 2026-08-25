@@ -12,21 +12,22 @@ struct ChatMessageBubble: View {
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
 
-                Text(
-                    message.role == .assistant
-                        ? ChatMarkdownRenderer.render(message.text)
-                        : AttributedString(message.text)
+                Group {
+                    if message.role == .assistant {
+                        AssistantMessageContent(source: message.text)
+                    } else {
+                        Text(message.text)
+                            .textSelection(.enabled)
+                    }
+                }
+                .font(.body)
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .adaptiveGlass(
+                    role: message.role == .user ? .userMessage : .assistantMessage,
+                    in: RoundedRectangle(cornerRadius: 16)
                 )
-                    .textSelection(.enabled)
-                    .font(.body)
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.leading)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .adaptiveGlass(
-                        role: message.role == .user ? .userMessage : .assistantMessage,
-                        in: RoundedRectangle(cornerRadius: 16)
-                    )
             }
 
             if message.role == .assistant { Spacer(minLength: 34) }

@@ -19,7 +19,7 @@ enum MacBrainDatabaseError: LocalizedError, Equatable, Sendable {
 }
 
 actor MacBrainDatabase: VectorStore {
-    static let currentSchemaVersion = 4
+    static let currentSchemaVersion = 7
 
     private let connection: SQLiteConnection
     private(set) var schemaVersion = 0
@@ -135,7 +135,10 @@ actor MacBrainDatabase: VectorStore {
                     "INSERT INTO chunks(id, document_id, source_id, text, start_offset, end_offset, page_number, line_start, line_end, is_deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
                     chunk.bindings
                 )
-                try connection.execute("INSERT INTO chunks_fts(chunk_id, normalized_text) VALUES (?, ?)", [.text(chunk.id.uuidString), .text(chunk.text.normalizedForSearch)])
+                try connection.execute(
+                    "INSERT INTO chunks_fts(chunk_id, normalized_text) VALUES (?, ?)",
+                    [.text(chunk.id.uuidString), .text(searchableText(for: chunk, document: document))]
+                )
             }
             for embedding in embeddings { try insert(embedding) }
         }
@@ -178,18 +181,16 @@ actor MacBrainDatabase: VectorStore {
                     "INSERT INTO documents(id, source_id, external_id, title, text, source_label, content_hash, created_at, modified_at, is_deleted, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     document.bindings
                 )
-                let chunk = StoredChunk(
-                    documentID: document.id,
-                    sourceID: sourceID,
-                    text: document.text,
-                    startOffset: 0,
-                    endOffset: document.text.utf16.count
-                )
-                try connection.execute(
-                    "INSERT INTO chunks(id, document_id, source_id, text, start_offset, end_offset, page_number, line_start, line_end, is_deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
-                    chunk.bindings
-                )
-                try connection.execute("INSERT INTO chunks_fts(chunk_id, normalized_text) VALUES (?, ?)", [.text(chunk.id.uuidString), .text(chunk.text.normalizedForSearch)])
+                for chunk in DocumentChunker().chunks(for: document) {
+                    try connection.execute(
+                        "INSERT INTO chunks(id, document_id, source_id, text, start_offset, end_offset, page_number, line_start, line_end, is_deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                        chunk.bindings
+                    )
+                    try connection.execute(
+                        "INSERT INTO chunks_fts(chunk_id, normalized_text) VALUES (?, ?)",
+                        [.text(chunk.id.uuidString), .text(searchableText(for: chunk, document: document))]
+                    )
+                }
             }
         }
     }
@@ -306,6 +307,36 @@ actor MacBrainDatabase: VectorStore {
         return try connection.rows("SELECT id, conversation_id, role, text, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at", [.text(conversationID.uuidString)]).map(StoredMessage.init(row:))
     }
 
+    func cachedResponse(for key: String) throws -> String? {
+        try ensureMigrated()
+        guard let row = try connection.row(
+            "SELECT response FROM response_cache WHERE cache_key = ?",
+            [.text(key)]
+        ) else { return nil }
+        try connection.execute(
+            "UPDATE response_cache SET accessed_at = ? WHERE cache_key = ?",
+            [.double(Date.now.timeIntervalSince1970), .text(key)]
+        )
+        return try row.text("response")
+    }
+
+    func saveCachedResponse(_ response: String, key: String, model: String, sourceRevision: String) throws {
+        try ensureMigrated()
+        let now = Date.now.timeIntervalSince1970
+        try connection.execute(
+            """
+            INSERT INTO response_cache(cache_key, response, model, source_revision, created_at, accessed_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(cache_key) DO UPDATE SET response = excluded.response, model = excluded.model,
+                source_revision = excluded.source_revision, accessed_at = excluded.accessed_at
+            """,
+            [.text(key), .text(response), .text(model), .text(sourceRevision), .double(now), .double(now)]
+        )
+        try connection.execute(
+            "DELETE FROM response_cache WHERE cache_key NOT IN (SELECT cache_key FROM response_cache ORDER BY accessed_at DESC LIMIT 500)"
+        )
+    }
+
     func replaceConversations(_ conversations: [(conversation: StoredConversation, messages: [StoredMessage])]) throws {
         try ensureMigrated()
         try connection.transaction {
@@ -352,7 +383,54 @@ actor MacBrainDatabase: VectorStore {
 
     func save(job: IndexingJob) throws {
         try ensureMigrated()
-        try connection.execute("INSERT INTO indexing_jobs(id, source_id, state, detail, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET state = excluded.state, detail = excluded.detail, updated_at = excluded.updated_at", [.text(job.id.uuidString), .text(job.sourceID.uuidString), .text(job.state), job.detail.map(SQLiteValue.text) ?? .null, .double(job.createdAt.timeIntervalSince1970), .double(job.updatedAt.timeIntervalSince1970)])
+        try connection.execute(
+            "INSERT INTO indexing_jobs(id, source_id, state, detail, created_at, updated_at, kind, chunk_ids, attempts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET state = excluded.state, detail = excluded.detail, kind = excluded.kind, chunk_ids = excluded.chunk_ids, attempts = excluded.attempts, updated_at = excluded.updated_at",
+            [
+                .text(job.id.uuidString), .text(job.sourceID.uuidString), .text(job.state.rawValue),
+                job.detail.map(SQLiteValue.text) ?? .null, .double(job.createdAt.timeIntervalSince1970),
+                .double(job.updatedAt.timeIntervalSince1970), .text(job.kind.rawValue),
+                .blob(try JSONEncoder().encode(job.chunkIDs)), .integer(job.attempts)
+            ]
+        )
+    }
+
+    func indexingJobs(sourceID: UUID) throws -> [IndexingJob] {
+        try ensureMigrated()
+        return try connection.rows(
+            "SELECT id, source_id, state, detail, created_at, updated_at, kind, chunk_ids, attempts FROM indexing_jobs WHERE source_id = ? ORDER BY created_at",
+            [.text(sourceID.uuidString)]
+        ).map(IndexingJob.init(row:))
+    }
+
+    func pendingIndexingJobs() throws -> [IndexingJob] {
+        try ensureMigrated()
+        return try connection.rows(
+            "SELECT id, source_id, state, detail, created_at, updated_at, kind, chunk_ids, attempts FROM indexing_jobs WHERE state IN ('pending', 'processing') ORDER BY created_at",
+            []
+        ).map(IndexingJob.init(row:))
+    }
+
+    func chunks(ids: [UUID]) throws -> [StoredChunk] {
+        try ensureMigrated()
+        return try ids.compactMap { id in
+            guard let row = try connection.row(
+                "SELECT id, document_id, source_id, text, start_offset, end_offset, page_number, line_start, line_end FROM chunks WHERE id = ? AND is_deleted = 0",
+                [.text(id.uuidString)]
+            ) else { return nil }
+            return try StoredChunk(row: row)
+        }
+    }
+
+    func chunkIDs(sourceID: UUID, documentExternalIDs: Set<String>) throws -> [UUID] {
+        try ensureMigrated()
+        guard !documentExternalIDs.isEmpty else { return [] }
+        let rows = try connection.rows(
+            "SELECT c.id, d.external_id FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.source_id = ? AND c.is_deleted = 0",
+            [.text(sourceID.uuidString)]
+        )
+        return try rows.compactMap { row in
+            documentExternalIDs.contains(try row.text("external_id")) ? try row.uuid("id") : nil
+        }
     }
 
     private func insert(_ embedding: StoredEmbedding) throws {
@@ -371,6 +449,20 @@ actor MacBrainDatabase: VectorStore {
 
     private func insert(_ message: StoredMessage) throws {
         try connection.execute("INSERT INTO messages(id, conversation_id, role, text, created_at) VALUES (?, ?, ?, ?, ?)", [.text(message.id.uuidString), .text(message.conversationID.uuidString), .text(message.role.rawValue), .text(message.text), .double(message.createdAt.timeIntervalSince1970)])
+    }
+
+    private func searchableText(for chunk: StoredChunk, document: StoredDocument) -> String {
+        let location = [
+            document.externalID,
+            document.metadata["path"] ?? "",
+            document.metadata["relativePath"] ?? ""
+        ]
+        let metadata = document.metadata
+            .sorted { $0.key < $1.key }
+            .flatMap { [$0.key, $0.value] }
+        return ([document.title, document.sourceLabel] + location + metadata + [chunk.text])
+            .joined(separator: " ")
+            .normalizedForSearch
     }
 
     private func ensureMigrated() throws {
@@ -428,6 +520,19 @@ private let migrations: [DatabaseMigration] = [
     ]),
     DatabaseMigration(version: 4, statements: [
         "CREATE TABLE IF NOT EXISTS source_records (source_id TEXT PRIMARY KEY NOT NULL REFERENCES sources(id) ON DELETE CASCADE, record_json BLOB NOT NULL)"
+    ]),
+    DatabaseMigration(version: 5, statements: [
+        "ALTER TABLE indexing_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'embedding'",
+        "ALTER TABLE indexing_jobs ADD COLUMN chunk_ids BLOB",
+        "ALTER TABLE indexing_jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
+    ]),
+    DatabaseMigration(version: 6, statements: [
+        "CREATE TABLE IF NOT EXISTS response_cache (cache_key TEXT PRIMARY KEY NOT NULL, response TEXT NOT NULL, model TEXT NOT NULL, source_revision TEXT NOT NULL, created_at REAL NOT NULL, accessed_at REAL NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS response_cache_accessed_index ON response_cache(accessed_at)"
+    ]),
+    DatabaseMigration(version: 7, statements: [
+        "DELETE FROM chunks_fts",
+        "INSERT INTO chunks_fts(chunk_id, normalized_text) SELECT c.id, lower(d.title || ' ' || d.source_label || ' ' || d.external_id || ' ' || CAST(d.metadata AS TEXT) || ' ' || c.text) FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.is_deleted = 0 AND d.is_deleted = 0"
     ])
 ]
 
@@ -600,6 +705,29 @@ private extension StoredChunk {
     }
 }
 
+private extension IndexingJob {
+    init(row: SQLiteRow) throws {
+        guard let kind = IndexingJobKind(rawValue: try row.text("kind")),
+              let state = IndexingJobState(rawValue: try row.text("state")) else {
+            throw MacBrainDatabaseError.sqlite("Unknown indexing job state.")
+        }
+        self.init(
+            id: try row.uuid("id"),
+            sourceID: try row.uuid("source_id"),
+            kind: kind,
+            state: state,
+            chunkIDs: row.values["chunk_ids"].flatMap { value in
+                if case .blob(let data) = value { return try? JSONDecoder().decode([UUID].self, from: data) }
+                return nil
+            } ?? [],
+            attempts: row.optionalInteger("attempts") ?? 0,
+            detail: row.values["detail"].flatMap { if case .text(let value) = $0 { value } else { nil } },
+            createdAt: try row.date("created_at"),
+            updatedAt: try row.date("updated_at")
+        )
+    }
+}
+
 private extension StoredConversation {
     init(row: SQLiteRow) throws {
         self.init(id: try row.uuid("id"), title: try row.text("title"), greeting: try row.text("greeting"), createdAt: try row.date("created_at"), updatedAt: try row.date("updated_at"), isArchived: try row.integer("is_archived") != 0, isPinned: try row.integer("is_pinned") != 0)
@@ -621,10 +749,19 @@ private extension String {
     var searchExpression: String {
         split { !$0.isLetter && !$0.isNumber }
             .map(String.init)
-            .filter { !$0.isEmpty }
+            .filter { token in
+                let normalized = token.normalizedForSearch.lowercased()
+                return normalized.count > 1 && !Self.searchStopWords.contains(normalized)
+            }
             .map { "\"\($0.replacingOccurrences(of: "\"", with: ""))\"" }
             .joined(separator: " AND ")
     }
+
+    private static let searchStopWords: Set<String> = [
+        "a", "an", "and", "are", "about", "can", "could", "do", "does", "for", "from", "give", "how",
+        "i", "in", "is", "it", "me", "my", "of", "on", "please", "show", "tell", "that", "the", "there",
+        "this", "to", "what", "whats", "where", "which", "with", "would", "you", "your"
+    ]
 }
 
 private func cosineSimilarity(_ lhs: [Float], _ rhs: [Float]) -> Double {

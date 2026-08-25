@@ -105,6 +105,34 @@ final class MacBrainDatabaseTests: XCTestCase {
         XCTAssertEqual(matches.first?.text, document.text)
     }
 
+    func testFilenameAndRelativePathAreSearchableLocalEvidence() async throws {
+        let database = try MacBrainDatabase(url: try temporaryDatabaseURL())
+        let repository = LocalSourceRepository(fileURL: try temporaryDatabaseURL(), database: database)
+        let record = ConnectorRecord(kind: .folder, displayName: "Test folder", configuration: .init())
+        let document = ConnectorDocument(
+            connectorID: record.id,
+            externalID: "/tmp/test/nested/notes.md",
+            title: "Release decisions",
+            text: "Ship the local-first plan.",
+            sourceLabel: "Test folder",
+            metadata: [
+                "path": "/tmp/test/nested/notes.md",
+                "relativePath": "nested/notes.md"
+            ]
+        )
+
+        try await repository.save(record)
+        _ = try await repository.replaceDocuments(for: record.id, with: [document])
+
+        let matches = await repository.search("notes.md")
+        let response = try await LocalKnowledgeResponder(repository: repository)
+            .respond(to: "What's there in my notes.md?")
+
+        XCTAssertEqual(matches.map(\.externalID), [document.externalID])
+        XCTAssertTrue(response.contains("Ship the local-first plan."))
+        XCTAssertFalse(response.contains("not directly accessible"))
+    }
+
     func testRepeatedUnchangedSourceSyncKeepsCachedIndexEntries() async throws {
         let database = try MacBrainDatabase(url: try temporaryDatabaseURL())
         let sourceStoreURL = try temporaryDatabaseURL()
@@ -180,6 +208,31 @@ final class MacBrainDatabaseTests: XCTestCase {
         let finalUnchangedChunk = try await database.searchChunks(matching: "bravo").first
         XCTAssertTrue(removedFile.isEmpty)
         XCTAssertEqual(finalUnchangedChunk?.id, unchangedChunkID)
+    }
+
+    func testSourcePersistenceSplitsLongDocumentsIntoCitationChunks() async throws {
+        let database = try MacBrainDatabase(url: try temporaryDatabaseURL())
+        let repository = LocalSourceRepository(fileURL: try temporaryDatabaseURL(), database: database)
+        let record = ConnectorRecord(kind: .folder, displayName: "Work", configuration: .init())
+        let text = Array(repeating: "Local citations retain exact chunk offsets.", count: 80).joined(separator: "\n")
+        try await repository.save(record)
+
+        _ = try await repository.replaceDocuments(for: record.id, with: [
+            ConnectorDocument(
+                connectorID: record.id,
+                externalID: "work/long.md",
+                title: "Long document",
+                text: text,
+                sourceLabel: "Work",
+                metadata: ["format": "md"]
+            )
+        ])
+
+        let chunks = try await database.searchChunks(matching: "citations offsets")
+        XCTAssertGreaterThan(chunks.count, 1)
+        XCTAssertEqual(chunks.first?.startOffset, 0)
+        XCTAssertNotNil(chunks.first?.lineStart)
+        XCTAssertNotNil(chunks.last?.lineEnd)
     }
 
     func testChatSessionRepositoryRestoresMessagesArchiveAndPinState() async throws {

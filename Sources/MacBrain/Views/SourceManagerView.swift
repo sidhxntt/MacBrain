@@ -7,6 +7,7 @@ struct SourceManagerView: View {
     @State private var selectedKind: SourceConnectorKind = .folder
     @State private var selectedURL: URL?
     @State private var commitRange = ""
+    @State private var excludedPaths = ""
     @State private var recordPendingDeletion: ConnectorRecord?
     @State private var selectedSourceTab: SourceOverviewTab = .connected
 
@@ -113,6 +114,10 @@ struct SourceManagerView: View {
                 if selectedKind == .gitRepository {
                     TextField("Commit range (optional)", text: $commitRange, prompt: Text("Defaults to HEAD"))
                 }
+                TextField("Exclude paths (optional)", text: $excludedPaths, prompt: Text("e.g. cache, generated/output"))
+                Text("Comma-separated relative paths. Hidden and secret files remain included unless you explicitly exclude them.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             case .browserProfile:
                 Label("MacBrain will find supported installed profiles after you confirm. It does not inspect unrelated apps.", systemImage: "checkmark.shield")
                     .font(.caption)
@@ -247,11 +252,11 @@ struct SourceManagerView: View {
         case .folder:
             guard let selectedURL else { return }
             displayName = selectedURL.lastPathComponent
-            configuration = SourceConnectorConfiguration(localPath: selectedURL.path, securityScopedBookmark: bookmark(for: selectedURL))
+            configuration = SourceConnectorConfiguration(localPath: selectedURL.path, securityScopedBookmark: bookmark(for: selectedURL), excludedRelativePaths: parsedExcludedPaths)
         case .gitRepository:
             guard let selectedURL else { return }
             displayName = selectedURL.lastPathComponent
-            configuration = SourceConnectorConfiguration(localPath: selectedURL.path, securityScopedBookmark: bookmark(for: selectedURL), commitRange: commitRange)
+            configuration = SourceConnectorConfiguration(localPath: selectedURL.path, securityScopedBookmark: bookmark(for: selectedURL), commitRange: commitRange, excludedRelativePaths: parsedExcludedPaths)
         case .browserProfile:
             store.connectInstalledBrowserProfiles()
             return
@@ -260,6 +265,13 @@ struct SourceManagerView: View {
             configuration = SourceConnectorConfiguration()
         }
         store.addAndSync(kind: selectedKind, displayName: displayName, configuration: configuration)
+    }
+
+    private var parsedExcludedPaths: [String] {
+        excludedPaths
+            .split(whereSeparator: { $0 == "," || $0.isNewline })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
     private var selectionButtonTitle: String {
@@ -316,8 +328,9 @@ private struct SyncScheduleSummary: View {
                 Text(isSyncing ? "Syncing local sources" : "Background sync is on")
                     .font(.subheadline.weight(.medium))
                 if let nextRefresh {
-                    Text("Next refresh \(nextRefresh.formatted(.relative(presentation: .named)))")
+                    (Text("Next refresh in ") + Text(nextRefresh, style: .timer))
                         .font(.caption)
+                        .monospacedDigit()
                         .foregroundStyle(.secondary)
                 } else {
                     Text("Refreshes every five minutes while MacBrain is open")

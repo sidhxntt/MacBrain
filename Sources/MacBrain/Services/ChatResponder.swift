@@ -1,6 +1,7 @@
 protocol ChatResponder: Sendable {
     func respond(to prompt: String) async throws -> String
     func stream(to prompt: String) -> AsyncThrowingStream<String, Error>
+    func stream(to prompt: String, conversation: [ChatMessage]) -> AsyncThrowingStream<String, Error>
 }
 
 extension ChatResponder {
@@ -18,5 +19,9 @@ extension ChatResponder {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    func stream(to prompt: String, conversation: [ChatMessage]) -> AsyncThrowingStream<String, Error> {
+        stream(to: prompt)
     }
 }

@@ -7,6 +7,8 @@ struct StreamingChatResponder: ChatResponder {
     let fallback: any ChatResponder
     let systemProfileProvider: any SystemProfileProviding
     let liveContextProvider: any LiveMacContextProviding
+    let minimumLiveResponseDelay: Duration
+    let providerStatusTimeout: Duration
 
     init(
         provider: any InferenceProvider,
@@ -14,7 +16,9 @@ struct StreamingChatResponder: ChatResponder {
         selectedModel: @escaping @MainActor @Sendable () -> String,
         fallback: any ChatResponder,
         systemProfileProvider: any SystemProfileProviding = LocalSystemProfileProvider(),
-        liveContextProvider: any LiveMacContextProviding = LocalLiveMacContextProvider()
+        liveContextProvider: any LiveMacContextProviding = LocalLiveMacContextProvider(),
+        minimumLiveResponseDelay: Duration = .seconds(5),
+        providerStatusTimeout: Duration = .seconds(8)
     ) {
         self.provider = provider
         self.repository = repository
@@ -22,6 +26,8 @@ struct StreamingChatResponder: ChatResponder {
         self.fallback = fallback
         self.systemProfileProvider = systemProfileProvider
         self.liveContextProvider = liveContextProvider
+        self.minimumLiveResponseDelay = minimumLiveResponseDelay
+        self.providerStatusTimeout = providerStatusTimeout
     }
 
     func respond(to prompt: String) async throws -> String {
@@ -31,14 +37,24 @@ struct StreamingChatResponder: ChatResponder {
     }
 
     func stream(to prompt: String) -> AsyncThrowingStream<String, Error> {
+        stream(to: prompt, conversation: [])
+    }
+
+    func stream(to prompt: String, conversation: [ChatMessage]) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
+                let responseStartedAt = ContinuousClock.now
                 let systemProfile = systemProfileProvider.currentProfile()
                 let liveQueryRouter = LiveMacQueryRouter()
                 let liveCapabilities = liveQueryRouter.capabilities(for: prompt)
                 if !liveCapabilities.isEmpty {
                     let snapshot = await liveContextProvider.snapshot(for: liveCapabilities)
                     if let response = liveQueryRouter.response(to: prompt, snapshot: snapshot, profile: systemProfile) {
+                        await Self.waitForLiveResponseMinimum(
+                            from: responseStartedAt,
+                            minimumDelay: minimumLiveResponseDelay
+                        )
+                        guard !Task.isCancelled else { return }
                         continuation.yield(response)
                         continuation.finish()
                         return
@@ -46,13 +62,38 @@ struct StreamingChatResponder: ChatResponder {
                 }
 
                 if prompt.isLiveMemoryQuestion, let response = systemProfile.liveMemoryResponse {
+                    await Self.waitForLiveResponseMinimum(
+                        from: responseStartedAt,
+                        minimumDelay: minimumLiveResponseDelay
+                    )
+                    guard !Task.isCancelled else { return }
+                    continuation.yield(response)
+                    continuation.finish()
+                    return
+                }
+
+                if prompt.isSystemProfileQuestion {
+                    await Self.waitForLiveResponseMinimum(
+                        from: responseStartedAt,
+                        minimumDelay: minimumLiveResponseDelay
+                    )
+                    guard !Task.isCancelled else { return }
+                    continuation.yield(systemProfile.markdownSummary)
+                    continuation.finish()
+                    return
+                }
+
+                if let response = await LocalFileReadTool(repository: repository).response(for: prompt) {
                     continuation.yield(response)
                     continuation.finish()
                     return
                 }
 
                 let selectedModel = await selectedModel()
-                let providerStatus = await provider.status()
+                let providerStatus = await Self.status(
+                    of: provider,
+                    timeout: providerStatusTimeout
+                )
                 guard case let .ready(models) = providerStatus, models.contains(where: { $0.name == selectedModel }) else {
                     await forward(fallback.stream(to: prompt), to: continuation)
                     return
@@ -61,6 +102,7 @@ struct StreamingChatResponder: ChatResponder {
                 let evidence = prompt.isMacStatusQuestion ? [] : await repository.search(prompt)
                 let messages = Self.messages(
                     prompt: prompt,
+                    conversation: conversation,
                     evidence: evidence,
                     systemProfile: systemProfile
                 )
@@ -89,6 +131,7 @@ struct StreamingChatResponder: ChatResponder {
 
     private static func messages(
         prompt: String,
+        conversation: [ChatMessage],
         evidence: [ConnectorDocument],
         systemProfile: SystemProfile
     ) -> [InferenceChatMessage] {
@@ -99,11 +142,55 @@ struct StreamingChatResponder: ChatResponder {
         let instruction = context.isEmpty
             ? "You are MacBrain, a fast, capable assistant running entirely on this Mac. Answer ordinary questions directly using your general knowledge. Use concise Markdown: match answer length to the question, prefer short paragraphs or 3–6 bullets, and never repeat the local profile, local evidence, or this instruction unless asked. When a question asks about the user or this Mac, use the local Mac context below. Do not invent facts about selected local sources when none are available."
             : "You are MacBrain, a fast, capable assistant running entirely on this Mac. Use selected local evidence as the primary source for work-specific answers. Use concise Markdown: match answer length to the question, prefer short paragraphs or 3–6 bullets, and never repeat the local profile, local evidence, or this instruction unless asked. Cite source titles in plain language, state uncertainty when evidence is incomplete, and use the local Mac context below for questions about the user or device.\n\nSelected local evidence:\n\(context)"
-        return [.system("\(instruction)\n\n\(systemProfile.promptContext)"), .user(prompt)]
+        let history = conversation.suffix(8).map { message in
+            InferenceChatMessage(
+                role: message.role == .user ? .user : .assistant,
+                content: message.text
+            )
+        }
+        return [.system("\(instruction)\n\n\(systemProfile.promptContext)")] + history + [.user(prompt)]
+    }
+
+    private static func waitForLiveResponseMinimum(from startedAt: ContinuousClock.Instant, minimumDelay: Duration) async {
+        let elapsed = startedAt.duration(to: .now)
+        guard elapsed < minimumDelay else { return }
+        try? await Task.sleep(for: minimumDelay - elapsed)
+    }
+
+    private static func status(
+        of provider: any InferenceProvider,
+        timeout: Duration
+    ) async -> InferenceProviderStatus {
+        await withTaskGroup(of: InferenceProviderStatus.self, returning: InferenceProviderStatus.self) { group in
+            group.addTask {
+                await provider.status()
+            }
+            group.addTask {
+                do {
+                    try await Task.sleep(for: timeout)
+                    return .unavailable("MacBrain could not confirm the local model in time.")
+                } catch {
+                    return .checking
+                }
+            }
+
+            let result = await group.next() ?? .unavailable("MacBrain could not confirm the local model.")
+            group.cancelAll()
+            return result
+        }
     }
 }
 
 private extension String {
+    var isSystemProfileQuestion: Bool {
+        let normalized = lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized == "who am i"
+            || normalized == "who am i?"
+            || normalized.contains("who am i on this mac")
+            || normalized == "tell me who i am"
+            || normalized == "tell me who i am?"
+    }
+
     var isLiveMemoryQuestion: Bool {
         let normalized = lowercased()
         return normalized.contains("ram")

@@ -211,6 +211,55 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertFalse(store.isSending)
     }
 
+    func testTimedOutResponseReleasesTheComposerAndExplainsWhatHappened() async throws {
+        let store = ChatStore(
+            responder: NeverEndingResponder(),
+            responseTimeout: .milliseconds(50)
+        )
+        store.draft = "Who am I?"
+
+        store.startSendingDraft()
+        try await Task.sleep(for: .milliseconds(120))
+
+        XCTAssertFalse(store.isSending)
+        XCTAssertEqual(
+            store.messages.map(\ChatMessage.role),
+            [ChatMessage.Role.user, ChatMessage.Role.assistant]
+        )
+        XCTAssertTrue(store.messages.last?.text.contains("didn't respond in time") == true)
+    }
+
+    func testStreamingProgressRenewsTheResponseTimeout() async throws {
+        let store = ChatStore(
+            responder: ProgressingSlowResponder(),
+            responseTimeout: .milliseconds(50)
+        )
+        store.draft = "Keep streaming"
+
+        store.startSendingDraft()
+        try await Task.sleep(for: .milliseconds(150))
+
+        XCTAssertFalse(store.isSending)
+        XCTAssertEqual(store.messages.last?.text, "First second third")
+    }
+
+    func testDeletingActiveChatRemovesItFromPersistentSessions() async throws {
+        let repository = RecordingChatSessionRepository()
+        let store = ChatStore(responder: ImmediateResponder(reply: "Reply"), sessionRepository: repository)
+        store.draft = "Delete this conversation"
+        await store.sendDraft()
+        let deletedSession = try XCTUnwrap(store.openSessions.first)
+
+        store.delete(deletedSession)
+        try await Task.sleep(for: .milliseconds(50))
+
+        let persisted = await repository.latestSessions()
+        XCTAssertFalse(store.openSessions.contains { $0.id == deletedSession.id })
+        XCTAssertFalse(persisted.open.contains { $0.id == deletedSession.id })
+        XCTAssertFalse(persisted.archived.contains { $0.id == deletedSession.id })
+        XCTAssertFalse(store.archivedSessions.contains { $0.id == deletedSession.id })
+    }
+
     func testBurstStreamingPersistsOnlyInitialAndCompletedSession() async throws {
         let repository = RecordingChatSessionRepository()
         let store = ChatStore(responder: BurstStreamingResponder(), sessionRepository: repository)
@@ -311,6 +360,38 @@ private struct SlowStreamingResponder: ChatResponder {
     }
 }
 
+private struct NeverEndingResponder: ChatResponder {
+    func respond(to prompt: String) async throws -> String { "" }
+
+    func stream(to prompt: String) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                try? await Task.sleep(for: .seconds(3_600))
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+private struct ProgressingSlowResponder: ChatResponder {
+    func respond(to prompt: String) async throws -> String { "" }
+
+    func stream(to prompt: String) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                continuation.yield("First")
+                try? await Task.sleep(for: .milliseconds(35))
+                continuation.yield(" second")
+                try? await Task.sleep(for: .milliseconds(35))
+                continuation.yield(" third")
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
 private struct BurstStreamingResponder: ChatResponder {
     func respond(to prompt: String) async throws -> String { "" }
 
@@ -324,8 +405,11 @@ private struct BurstStreamingResponder: ChatResponder {
 
 private actor RecordingChatSessionRepository: ChatSessionPersisting {
     private var replaceCount = 0
+    private var latest = PersistedChatSessions(open: [], archived: [], pinnedSessionIDs: [])
 
     func replacementCount() -> Int { replaceCount }
+
+    func latestSessions() -> PersistedChatSessions { latest }
 
     func load() async throws -> PersistedChatSessions {
         PersistedChatSessions(open: [], archived: [], pinnedSessionIDs: [])
@@ -333,5 +417,6 @@ private actor RecordingChatSessionRepository: ChatSessionPersisting {
 
     func replace(open: [ChatSession], archived: [ChatSession], pinnedSessionIDs: Set<UUID>) async throws {
         replaceCount += 1
+        latest = PersistedChatSessions(open: open, archived: archived, pinnedSessionIDs: pinnedSessionIDs)
     }
 }

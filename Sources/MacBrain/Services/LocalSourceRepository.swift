@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 actor LocalSourceRepository {
@@ -35,6 +36,9 @@ actor LocalSourceRepository {
     private let fileURL: URL
     private let database: MacBrainDatabase?
     private var snapshot: Snapshot
+    /// Blocks late async connector work from recreating a source that was deleted
+    /// while its sync was still in flight.
+    private var removedRecordIDs = Set<UUID>()
 
     init(fileURL: URL? = nil, database: MacBrainDatabase? = nil) {
         let defaultURL = Self.defaultFileURL()
@@ -75,6 +79,9 @@ actor LocalSourceRepository {
     }
 
     func save(_ record: ConnectorRecord) async throws {
+        guard !removedRecordIDs.contains(record.id) else {
+            throw ConnectorError.sourceUnavailable("This source no longer exists.")
+        }
         if let index = snapshot.records.firstIndex(where: { $0.id == record.id }) {
             snapshot.records[index] = record
         } else {
@@ -87,6 +94,7 @@ actor LocalSourceRepository {
     }
 
     func replaceDocuments(for connectorID: UUID, with documents: [ConnectorDocument]) async throws -> Int {
+        try ensureSourceHasNotBeenRemoved(connectorID)
         var seen = Set<String>()
         let uniqueDocuments = documents.filter { seen.insert($0.externalID + $0.contentHash).inserted }
         let existingDocuments = snapshot.documents.filter { $0.connectorID == connectorID }
@@ -113,6 +121,7 @@ actor LocalSourceRepository {
     }
 
     func mergeDocuments(for connectorID: UUID, with documents: [ConnectorDocument]) async throws -> Int {
+        try ensureSourceHasNotBeenRemoved(connectorID)
         var documentsByExternalID: [String: ConnectorDocument] = [:]
         for document in documents {
             documentsByExternalID[document.externalID] = document
@@ -143,7 +152,47 @@ actor LocalSourceRepository {
         return documentCount(for: connectorID)
     }
 
+    func reconcileDocuments(
+        for connectorID: UUID,
+        changedDocuments: [ConnectorDocument],
+        presentExternalIDs: [String]
+    ) async throws -> Int {
+        try ensureSourceHasNotBeenRemoved(connectorID)
+        let existingByExternalID = Dictionary(
+            uniqueKeysWithValues: snapshot.documents.filter { $0.connectorID == connectorID }.map { ($0.externalID, $0) }
+        )
+        let changedByExternalID = Dictionary(
+            uniqueKeysWithValues: changedDocuments.map { ($0.externalID, $0) }
+        )
+        let reconciled = presentExternalIDs.compactMap { externalID in
+            changedByExternalID[externalID] ?? existingByExternalID[externalID]
+        }
+        let existing = snapshot.documents.filter { $0.connectorID == connectorID }
+        let changed = existing.count != reconciled.count
+            || zip(existing.sorted { $0.externalID < $1.externalID }, reconciled.sorted { $0.externalID < $1.externalID }).contains {
+                $0.externalID != $1.externalID || !$0.matchesCacheEntry(for: $1)
+            }
+        guard changed else { return existing.count }
+
+        snapshot.documents.removeAll { $0.connectorID == connectorID }
+        snapshot.documents.append(contentsOf: reconciled)
+        try persist()
+        if let database {
+            try await database.replaceSourceDocuments(
+                sourceID: connectorID,
+                documents: snapshot.documents.filter { $0.connectorID == connectorID }.map(StoredDocument.init)
+            )
+        }
+        return reconciled.count
+    }
+
+    func indexedChunkIDs(for connectorID: UUID, externalIDs: Set<String>) async -> [UUID] {
+        guard let database else { return [] }
+        return (try? await database.chunkIDs(sourceID: connectorID, documentExternalIDs: externalIDs)) ?? []
+    }
+
     func remove(id: UUID) async throws {
+        removedRecordIDs.insert(id)
         snapshot.records.removeAll { $0.id == id }
         snapshot.documents.removeAll { $0.connectorID == id }
         try persist()
@@ -187,8 +236,24 @@ actor LocalSourceRepository {
         snapshot.documents.filter { $0.connectorID == connectorID }.count
     }
 
+    func currentSourceRevision() -> String {
+        let material = snapshot.documents
+            .sorted { lhs, rhs in
+                (lhs.connectorID.uuidString, lhs.externalID) < (rhs.connectorID.uuidString, rhs.externalID)
+            }
+            .map { "\($0.connectorID.uuidString)|\($0.externalID)|\($0.contentHash)" }
+            .joined(separator: "\n")
+        return SHA256.hash(data: Data(material.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
     private func persist() throws {
         try Self.persist(snapshot, to: fileURL)
+    }
+
+    private func ensureSourceHasNotBeenRemoved(_ connectorID: UUID) throws {
+        guard !removedRecordIDs.contains(connectorID) else {
+            throw ConnectorError.sourceUnavailable("This source no longer exists.")
+        }
     }
 
     private static func persist(_ snapshot: Snapshot, to fileURL: URL) throws {

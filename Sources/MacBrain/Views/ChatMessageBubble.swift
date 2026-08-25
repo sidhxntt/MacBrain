@@ -12,7 +12,11 @@ struct ChatMessageBubble: View {
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
 
-                Text(message.text)
+                Text(
+                    message.role == .assistant
+                        ? ChatMarkdownRenderer.render(message.text)
+                        : AttributedString(message.text)
+                )
                     .textSelection(.enabled)
                     .font(.body)
                     .foregroundStyle(.primary)

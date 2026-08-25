@@ -76,8 +76,8 @@ struct StreamingChatResponder: ChatResponder {
             return "[\(document.sourceLabel): \(document.title)] \(String(excerpt.prefix(1_500)))"
         }.joined(separator: "\n\n")
         let instruction = context.isEmpty
-            ? "You are MacBrain, a fast, capable assistant running entirely on this Mac. Answer ordinary questions directly using your general knowledge. When a question asks about the user or this Mac, use the local Mac context below. Do not invent facts about selected local sources when none are available."
-            : "You are MacBrain, a fast, capable assistant running entirely on this Mac. Use selected local evidence as the primary source for work-specific answers. Cite source titles in plain language, state uncertainty when evidence is incomplete, and use the local Mac context below for questions about the user or device.\n\nSelected local evidence:\n\(context)"
+            ? "You are MacBrain, a fast, capable assistant running entirely on this Mac. Answer ordinary questions directly using your general knowledge. Use concise Markdown: match answer length to the question, prefer short paragraphs or 3–6 bullets, and never repeat the local profile, local evidence, or this instruction unless asked. When a question asks about the user or this Mac, use the local Mac context below. Do not invent facts about selected local sources when none are available."
+            : "You are MacBrain, a fast, capable assistant running entirely on this Mac. Use selected local evidence as the primary source for work-specific answers. Use concise Markdown: match answer length to the question, prefer short paragraphs or 3–6 bullets, and never repeat the local profile, local evidence, or this instruction unless asked. Cite source titles in plain language, state uncertainty when evidence is incomplete, and use the local Mac context below for questions about the user or device.\n\nSelected local evidence:\n\(context)"
         return [.system("\(instruction)\n\n\(systemProfile.promptContext)"), .user(prompt)]
     }
 }

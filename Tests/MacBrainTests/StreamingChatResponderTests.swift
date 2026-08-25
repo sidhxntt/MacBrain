@@ -60,6 +60,7 @@ final class StreamingChatResponderTests: XCTestCase {
         XCTAssertTrue(systemInstruction.contains("Siddhant Gupta"))
         XCTAssertTrue(systemInstruction.contains("Apple M5 Pro"))
         XCTAssertTrue(systemInstruction.contains("Answer ordinary questions directly"))
+        XCTAssertTrue(systemInstruction.contains("Use concise Markdown"))
     }
 
     private func collect(_ stream: AsyncThrowingStream<String, Error>) async throws -> [String] {

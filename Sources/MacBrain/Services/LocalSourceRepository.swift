@@ -152,7 +152,11 @@ actor LocalSourceRepository {
         }
     }
 
-    func search(_ query: String, limit: Int = 5) -> [ConnectorDocument] {
+    func search(_ query: String, limit: Int = 5) async -> [ConnectorDocument] {
+        if let database, let documents = try? await database.searchDocuments(matching: query, limit: limit) {
+            return documents.map(ConnectorDocument.init)
+        }
+
         let tokens = query
             .lowercased()
             .split { !$0.isLetter && !$0.isNumber }
@@ -229,6 +233,22 @@ private extension StoredDocument {
         self.init(
             id: document.id,
             sourceID: document.connectorID,
+            externalID: document.externalID,
+            title: document.title,
+            text: document.text,
+            sourceLabel: document.sourceLabel,
+            createdAt: document.createdAt,
+            modifiedAt: document.modifiedAt,
+            metadata: document.metadata
+        )
+    }
+}
+
+private extension ConnectorDocument {
+    init(_ document: StoredDocument) {
+        self.init(
+            id: document.id,
+            connectorID: document.sourceID,
             externalID: document.externalID,
             title: document.title,
             text: document.text,

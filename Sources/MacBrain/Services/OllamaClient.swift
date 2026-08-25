@@ -286,12 +286,14 @@ struct OllamaChatRequest: Encodable {
 struct OllamaChatOptions: Encodable {
     let temperature: Double
     let numContext: Int
+    let numPredict: Int
 
-    static let macBrainDefaults = Self(temperature: 0.2, numContext: 8_192)
+    static let macBrainDefaults = Self(temperature: 0.2, numContext: 8_192, numPredict: 256)
 
     enum CodingKeys: String, CodingKey {
         case temperature
         case numContext = "num_ctx"
+        case numPredict = "num_predict"
     }
 }
 

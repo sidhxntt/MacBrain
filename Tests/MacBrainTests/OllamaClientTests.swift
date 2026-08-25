@@ -78,6 +78,7 @@ final class OllamaClientTests: XCTestCase {
 
         XCTAssertTrue(payload.contains("\"keep_alive\":\"30m\""))
         XCTAssertTrue(payload.contains("\"temperature\":0.2"))
+        XCTAssertTrue(payload.contains("\"num_predict\":256"))
     }
 
     func testServerFailureExposesActionableError() async {

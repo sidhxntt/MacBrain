@@ -61,8 +61,10 @@ final class MacBrainDatabaseTests: XCTestCase {
         ])
 
         let ftsMatches = try await database.searchChunks(matching: "FTS local")
+        let documentMatches = try await database.searchDocuments(matching: "FTS local")
         let vectorMatches = try await database.nearestChunks(to: [0.9, 0.1, 0], limit: 1)
         XCTAssertEqual(ftsMatches.map(\.id), [chunk.id])
+        XCTAssertEqual(documentMatches.map(\.id), [document.id])
         XCTAssertEqual(vectorMatches.map(\.id), [chunk.id])
 
         let rejected = StoredDocument(

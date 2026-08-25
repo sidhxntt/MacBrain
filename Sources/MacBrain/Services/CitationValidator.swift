@@ -8,9 +8,12 @@ enum CitationValidator {
 
     static func renderedSources(for answer: String, evidence: [RetrievalEvidence]) -> String {
         let used = citationIDs(in: answer)
-        let cited = evidence.filter { used.contains($0.citationID) }
-        guard !cited.isEmpty else { return "" }
-        return "\n\n### Sources\n" + cited.map(render).joined(separator: "\n")
+        return renderedSources(for: evidence.filter { used.contains($0.citationID) })
+    }
+
+    static func renderedSources(for evidence: [RetrievalEvidence]) -> String {
+        guard !evidence.isEmpty else { return "" }
+        return "### Sources\n" + evidence.map(render).joined(separator: "\n") + "\n\n"
     }
 
     private static func citationIDs(in text: String) -> Set<String> {

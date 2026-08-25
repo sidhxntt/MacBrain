@@ -264,6 +264,28 @@ actor MacBrainDatabase: VectorStore {
         }
     }
 
+    /// Returns a small, secondary evidence set that shares an extracted entity with direct matches.
+    /// Direct FTS/vector candidates remain primary; this becomes useful after graph extraction runs.
+    func graphRelatedChunks(to chunkIDs: [UUID], limit: Int = 4) throws -> [StoredChunk] {
+        try ensureMigrated()
+        guard !chunkIDs.isEmpty else { return [] }
+        let placeholders = Array(repeating: "?", count: chunkIDs.count).joined(separator: ",")
+        let rows = try connection.rows(
+            """
+            SELECT DISTINCT c.id, c.document_id, c.source_id, c.text, c.start_offset, c.end_offset, c.page_number, c.line_start, c.line_end
+            FROM mentions seed
+            JOIN mentions related ON related.entity_id = seed.entity_id
+            JOIN chunks c ON c.id = related.chunk_id
+            JOIN documents d ON d.id = c.document_id
+            WHERE seed.chunk_id IN (\(placeholders))
+              AND c.is_deleted = 0 AND d.is_deleted = 0
+            LIMIT ?
+            """,
+            chunkIDs.map { .text($0.uuidString) } + [.integer(limit)]
+        )
+        return try rows.map(StoredChunk.init(row:))
+    }
+
     func remove(chunkID: UUID) throws {
         try ensureMigrated()
         try connection.transaction {

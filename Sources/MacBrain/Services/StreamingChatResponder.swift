@@ -128,14 +128,12 @@ struct StreamingChatResponder: ChatResponder {
         evidence: [RetrievalEvidence] = []
     ) async {
         do {
-            var answer = ""
+            let initialSources = CitationValidator.renderedSources(for: evidence)
+            if !initialSources.isEmpty { continuation.yield(initialSources) }
             for try await token in stream {
                 try Task.checkCancellation()
-                answer.append(token)
                 continuation.yield(token)
             }
-            let citations = CitationValidator.renderedSources(for: answer, evidence: evidence)
-            if !citations.isEmpty { continuation.yield(citations) }
             continuation.finish()
         } catch is CancellationError {
             continuation.finish(throwing: OllamaClientError.cancelled)

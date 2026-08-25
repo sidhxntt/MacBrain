@@ -29,6 +29,8 @@ actor HybridEvidenceRetriever {
         var candidates = [UUID: Candidate]()
         try await add(lexical, rankWeight: 0.60, to: &candidates)
         try await add(semantic, rankWeight: 0.40, to: &candidates)
+        let graph = try await database.graphRelatedChunks(to: Array(candidates.keys), limit: min(4, candidateLimit))
+        try await add(graph, rankWeight: 0.15, to: &candidates)
         let selected = candidates.values
             .sorted { $0.score == $1.score ? $0.chunk.startOffset < $1.chunk.startOffset : $0.score > $1.score }
             .reduce(into: [Candidate]()) { selected, candidate in

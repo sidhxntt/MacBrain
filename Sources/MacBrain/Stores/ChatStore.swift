@@ -265,6 +265,7 @@ final class ChatStore: ObservableObject {
             title: title,
             messages: session.messages,
             greeting: session.greeting,
+            modelIdentifier: session.modelIdentifier,
             updatedAt: .now
         )
         openSessions[index] = updatedSession
@@ -307,7 +308,8 @@ final class ChatStore: ObservableObject {
             id: activeSessionID,
             title: currentTitle,
             messages: messages,
-            greeting: welcomeGreeting
+            greeting: welcomeGreeting,
+            modelIdentifier: openSessions[index].modelIdentifier
         )
         persistSessions(debounced: !persisting)
     }

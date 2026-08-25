@@ -31,6 +31,7 @@ actor LocalChatSessionRepository: ChatSessionPersisting {
                 title: conversation.title,
                 messages: messages,
                 greeting: conversation.greeting,
+                modelIdentifier: conversation.modelIdentifier,
                 updatedAt: conversation.updatedAt
             )
             if conversation.isArchived {
@@ -50,6 +51,7 @@ actor LocalChatSessionRepository: ChatSessionPersisting {
                     id: session.id,
                     title: session.title,
                     greeting: session.greeting,
+                    modelIdentifier: session.modelIdentifier,
                     updatedAt: session.updatedAt,
                     isArchived: isArchived,
                     isPinned: pinnedSessionIDs.contains(session.id)

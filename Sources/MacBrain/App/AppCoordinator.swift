@@ -9,6 +9,7 @@ final class AppCoordinator {
     let chatStore: ChatStore
     let memoryStore: MemoryStore
     let inferenceStore: InferenceStore
+    let contextSafeguards = ContextSafeguards()
     let workspaceStore = MainWorkspaceStore()
     private(set) var sidebarController: SidebarPanelController?
     private(set) var activationBarController: ActivationBarController?
@@ -38,7 +39,8 @@ final class AppCoordinator {
                 sourceRevisionProvider: sourceLibrary.repository,
                 selectedModel: { configuredInferenceStore.selectedChatModel }
             ),
-            sessionRepository: sessionRepository
+            sessionRepository: sessionRepository,
+            contextSafeguards: contextSafeguards
         )
     }
 
@@ -46,7 +48,8 @@ final class AppCoordinator {
         logger.info("Application launched")
         let sidebar = SidebarPanelController(
             sourceLibrary: sourceLibrary,
-            chatStore: chatStore
+            chatStore: chatStore,
+            contextSafeguards: contextSafeguards
         )
         let activationBar = ActivationBarController { [weak self] in
             self?.openSidebar()

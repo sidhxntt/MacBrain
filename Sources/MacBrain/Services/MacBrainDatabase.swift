@@ -114,6 +114,7 @@ actor MacBrainDatabase: VectorStore {
             let oldChunkIDs = try connection.rows("SELECT id FROM chunks WHERE document_id = ?", [.text(document.id.uuidString)])
                 .compactMap { try? $0.text("id") }
             for chunkID in oldChunkIDs {
+                try deleteGraphFacts(provenanceChunkID: chunkID)
                 try connection.execute("DELETE FROM chunks_fts WHERE chunk_id = ?", [.text(chunkID)])
             }
             try connection.execute("DELETE FROM chunks WHERE document_id = ?", [.text(document.id.uuidString)])
@@ -171,6 +172,7 @@ actor MacBrainDatabase: VectorStore {
                 let chunkIDs = try connection.rows("SELECT id FROM chunks WHERE document_id = ?", [.text(existing.id)])
                     .compactMap { try? $0.text("id") }
                 for chunkID in chunkIDs {
+                    try deleteGraphFacts(provenanceChunkID: chunkID)
                     try connection.execute("DELETE FROM chunks_fts WHERE chunk_id = ?", [.text(chunkID)])
                 }
                 try connection.execute("DELETE FROM documents WHERE id = ?", [.text(existing.id)])
@@ -289,6 +291,7 @@ actor MacBrainDatabase: VectorStore {
     func remove(chunkID: UUID) throws {
         try ensureMigrated()
         try connection.transaction {
+            try deleteGraphFacts(provenanceChunkID: chunkID.uuidString)
             try connection.execute("DELETE FROM embeddings WHERE chunk_id = ?", [.text(chunkID.uuidString)])
             try connection.execute("DELETE FROM chunks_fts WHERE chunk_id = ?", [.text(chunkID.uuidString)])
             try connection.execute("DELETE FROM chunks WHERE id = ?", [.text(chunkID.uuidString)])
@@ -413,6 +416,57 @@ actor MacBrainDatabase: VectorStore {
         }
     }
 
+    /// Stores independently inspectable, source-backed graph facts. Aliases below the
+    /// high-confidence threshold remain recorded but are never used for automatic lookup.
+    func save(graph mutation: GraphMutation) throws {
+        try ensureMigrated()
+        try connection.transaction {
+            for entity in mutation.entities {
+                try connection.execute("INSERT INTO entities(id, source_id, type, name, created_at, confidence) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, confidence = excluded.confidence", [.text(entity.id.uuidString), .text(entity.sourceID.uuidString), .text(entity.type.rawValue), .text(entity.name), .double(Date.now.timeIntervalSince1970), .double(entity.confidence)])
+            }
+            for alias in mutation.aliases { try connection.execute("INSERT INTO entity_aliases(entity_id, alias, confidence) VALUES (?, ?, ?) ON CONFLICT(entity_id, alias) DO UPDATE SET confidence = excluded.confidence", [.text(alias.entityID.uuidString), .text(alias.value), .double(alias.confidence)]) }
+            for mention in mutation.mentions { try connection.execute("INSERT INTO mentions(id, entity_id, chunk_id, start_offset, end_offset, confidence) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET confidence = excluded.confidence", [.text(mention.id.uuidString), .text(mention.entityID.uuidString), .text(mention.provenanceChunkID.uuidString), .integer(mention.startOffset), .integer(mention.endOffset), .double(mention.confidence)]) }
+            for relationship in mutation.relationships { try connection.execute("INSERT INTO relationships(id, from_entity_id, to_entity_id, type, provenance_chunk_id, confidence) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET confidence = excluded.confidence", [.text(relationship.id.uuidString), .text(relationship.fromEntityID.uuidString), .text(relationship.toEntityID.uuidString), .text(relationship.type.rawValue), .text(relationship.provenanceChunkID.uuidString), .double(relationship.confidence)]) }
+        }
+    }
+
+    func entity(matching name: String) throws -> GraphEntity? {
+        try ensureMigrated()
+        guard let row = try connection.row("SELECT id, source_id, type, name, confidence FROM entities WHERE lower(name) = lower(?) UNION SELECT e.id, e.source_id, e.type, e.name, e.confidence FROM entities e JOIN entity_aliases a ON a.entity_id = e.id WHERE lower(a.alias) = lower(?) AND a.confidence >= 0.8 LIMIT 1", [.text(name), .text(name)]) else { return nil }
+        return try graphEntity(row)
+    }
+
+    func expandGraph(fromChunkIDs chunkIDs: [UUID], maximumDepth: Int = 1, maximumResults: Int = 8) throws -> [GraphEvidence] {
+        try ensureMigrated()
+        guard !chunkIDs.isEmpty, maximumDepth > 0, maximumResults > 0 else { return [] }
+        var frontier = Set(chunkIDs.map(\.uuidString)); var visited = Set<String>(); var evidence: [GraphEvidence] = []
+        for _ in 0..<maximumDepth where evidence.count < maximumResults {
+            let entityIDs = try frontier.flatMap { id in try connection.rows("SELECT entity_id FROM mentions WHERE chunk_id = ?", [.text(id)]).map { try $0.text("entity_id") } }
+            guard !entityIDs.isEmpty else { break }
+            frontier.removeAll()
+            for entityID in entityIDs where visited.insert(entityID).inserted {
+                for row in try connection.rows("SELECT r.id, r.from_entity_id, r.to_entity_id, r.type, r.provenance_chunk_id, r.confidence, f.source_id AS from_source_id, f.type AS from_type, f.name AS from_name, f.confidence AS from_confidence, t.source_id AS to_source_id, t.type AS to_type, t.name AS to_name, t.confidence AS to_confidence FROM relationships r JOIN entities f ON f.id = r.from_entity_id JOIN entities t ON t.id = r.to_entity_id WHERE r.from_entity_id = ? OR r.to_entity_id = ? ORDER BY r.confidence DESC LIMIT ?", [.text(entityID), .text(entityID), .integer(maximumResults - evidence.count)]) {
+                    let relation = GraphRelationship(id: try row.uuid("id"), fromEntityID: try row.uuid("from_entity_id"), toEntityID: try row.uuid("to_entity_id"), type: GraphRelationshipType(rawValue: try row.text("type")) ?? .relatedTo, provenanceChunkID: try row.uuid("provenance_chunk_id"), confidence: try row.double("confidence"))
+                    let from = GraphEntity(id: relation.fromEntityID, sourceID: try row.uuid("from_source_id"), type: GraphEntityType(rawValue: try row.text("from_type")) ?? .topic, name: try row.text("from_name"), confidence: try row.double("from_confidence"))
+                    let to = GraphEntity(id: relation.toEntityID, sourceID: try row.uuid("to_source_id"), type: GraphEntityType(rawValue: try row.text("to_type")) ?? .topic, name: try row.text("to_name"), confidence: try row.double("to_confidence"))
+                    evidence.append(GraphEvidence(relationship: relation, from: from, to: to)); frontier.insert(relation.provenanceChunkID.uuidString)
+                    if evidence.count == maximumResults { break }
+                }
+            }
+        }
+        return evidence
+    }
+
+    func graphEvidence(matching query: String, maximumResults: Int = 4) throws -> [GraphEvidence] {
+        try ensureMigrated()
+        let tokens = query.split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count > 1 }
+        guard !tokens.isEmpty else { return [] }
+        let entities = try tokens.compactMap { try entity(matching: $0) }
+        guard !entities.isEmpty else { return [] }
+        let seedChunkIDs = try entities.flatMap { entity in try connection.rows("SELECT chunk_id FROM mentions WHERE entity_id = ?", [.text(entity.id.uuidString)]).map { try $0.uuid("chunk_id") } }
+        return try expandGraph(fromChunkIDs: seedChunkIDs, maximumDepth: 1, maximumResults: maximumResults)
+    }
+
     func save(job: IndexingJob) throws {
         try ensureMigrated()
         try connection.execute(
@@ -471,6 +525,14 @@ actor MacBrainDatabase: VectorStore {
             [.text(embedding.chunkID.uuidString), .blob(try JSONEncoder().encode(embedding.vector)), .text(embedding.indexIdentifier), .double(embedding.updatedAt.timeIntervalSince1970)]
         )
     }
+
+    private func deleteGraphFacts(provenanceChunkID: String) throws {
+        try connection.execute("DELETE FROM relationships WHERE provenance_chunk_id = ?", [.text(provenanceChunkID)])
+        try connection.execute("DELETE FROM mentions WHERE chunk_id = ?", [.text(provenanceChunkID)])
+    }
+
+    private func deleteGraphFacts(provenanceChunkID: UUID) throws { try deleteGraphFacts(provenanceChunkID: provenanceChunkID.uuidString) }
+    private func graphEntity(_ row: SQLiteRow) throws -> GraphEntity { try GraphEntity(id: row.uuid("id"), sourceID: row.uuid("source_id"), type: GraphEntityType(rawValue: row.text("type")) ?? .topic, name: row.text("name"), confidence: row.double("confidence")) }
 
     private func insert(_ conversation: StoredConversation) throws {
         try connection.execute(
@@ -565,6 +627,12 @@ private let migrations: [DatabaseMigration] = [
     DatabaseMigration(version: 7, statements: [
         "DELETE FROM chunks_fts",
         "INSERT INTO chunks_fts(chunk_id, normalized_text) SELECT c.id, lower(d.title || ' ' || d.source_label || ' ' || d.external_id || ' ' || CAST(d.metadata AS TEXT) || ' ' || c.text) FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.is_deleted = 0 AND d.is_deleted = 0"
+    ]),
+    DatabaseMigration(version: 8, statements: [
+        "ALTER TABLE entities ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0",
+        "ALTER TABLE entity_aliases ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0",
+        "CREATE INDEX IF NOT EXISTS mentions_chunk_index ON mentions(chunk_id)",
+        "CREATE INDEX IF NOT EXISTS relationships_provenance_index ON relationships(provenance_chunk_id)"
     ])
     , DatabaseMigration(version: 8, statements: [
         "ALTER TABLE conversations ADD COLUMN model_identifier TEXT NOT NULL DEFAULT 'local'"

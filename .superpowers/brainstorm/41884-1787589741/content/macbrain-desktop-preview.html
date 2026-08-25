@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MacBrain desktop preview</title>
+<style>
+  * { box-sizing:border-box } body { margin:0; min-height:100vh; display:grid; place-items:center; background:radial-gradient(circle at 20% 10%,#31204b 0,transparent 35%),radial-gradient(circle at 90% 80%,#0b5a55 0,transparent 35%),#0c0d12; color:#f4f4f5; font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif; }
+  .window { width:min(1240px,94vw); height:min(780px,88vh); display:grid; grid-template-columns:278px 1fr; overflow:hidden; border:1px solid rgba(255,255,255,.16); border-radius:18px; background:rgba(22,23,29,.86); box-shadow:0 28px 80px rgba(0,0,0,.5); backdrop-filter:blur(26px); }
+  .side { padding:22px 16px 14px; background:linear-gradient(165deg,rgba(52,37,79,.8),rgba(30,32,39,.74)); border-right:1px solid rgba(255,255,255,.09); display:flex; flex-direction:column; gap:9px; }
+  .traffic { color:#ff5f57; letter-spacing:7px; font-size:17px; margin-bottom:22px; } .brand { display:flex;align-items:center;gap:10px;font-size:21px;font-weight:700;margin-bottom:16px } .logo { width:28px;height:28px;border-radius:9px;background:#249d8f;display:grid;place-items:center;color:#071917;font-size:16px }
+  .action,.nav,.recent { padding:9px 10px; border-radius:9px; color:#d2d3d7; } .action { background:rgba(255,255,255,.09); } .nav { color:#c7c8cf }.muted {color:#93949d;font-size:13px;margin:22px 10px 5px}.recent { white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px }.recent.active {background:rgba(36,157,143,.2); color:#fff}.settings { margin-top:auto;border-top:1px solid rgba(255,255,255,.1);padding-top:14px }
+  .main { min-width:0;display:flex;flex-direction:column;background:rgba(15,16,20,.7) } .toolbar { height:56px;display:flex;align-items:center;gap:10px;padding:0 22px;border-bottom:1px solid rgba(255,255,255,.09);color:#b9bbc3 }.title {font-weight:650;color:#f2f2f3;margin-right:auto}.tool {border:1px solid rgba(255,255,255,.13);border-radius:9px;padding:6px 10px;font-size:13px}
+  .content {flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:50px 12%;text-align:center}.heroIcon{width:58px;height:58px;border-radius:20px;background:rgba(36,157,143,.16);border:1px solid rgba(36,157,143,.42);display:grid;place-items:center;font-size:28px;margin-bottom:17px}.content h1{font-size:34px;letter-spacing:-.8px;margin:0 0 10px}.content p{margin:0;color:#adafb8}.suggestions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;width:min(740px,100%);margin-top:35px;text-align:left}.suggestion{min-height:86px;border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:15px;background:rgba(255,255,255,.025);color:#caccd4;font-size:14px}.suggestion b{display:block;color:#f4f4f5;margin-top:8px}
+  .composerWrap{padding:0 56px 26px}.privacy{font-size:12px;color:#9fa1aa;text-align:center;margin-bottom:10px}.composer{border:1px solid rgba(255,255,255,.16);border-radius:16px;background:rgba(39,40,46,.8);box-shadow:0 10px 30px rgba(0,0,0,.18);overflow:hidden}.input{height:56px;padding:17px;color:#989aa3}.bar{border-top:1px solid rgba(255,255,255,.11);height:45px;display:flex;align-items:center;padding:0 13px;color:#c6c7cc}.send{margin-left:auto;border:0;border-radius:10px;background:#249d8f;color:#051e1b;padding:7px 11px;font-size:16px}
+  @media(max-width:760px){.window{grid-template-columns:1fr}.side{display:none}.composerWrap{padding:0 20px 20px}.suggestions{grid-template-columns:1fr}.content{padding:32px 8%}}
+</style>
+</head>
+<body>
+  <section class="window">
+    <aside class="side">
+      <div class="traffic">● ● ●</div>
+      <div class="brand"><span class="logo">✦</span> MacBrain</div>
+      <div class="action">✎&nbsp; New chat</div>
+      <div class="nav">◷&nbsp; Chat history</div>
+      <div class="nav">▣&nbsp; Sources</div>
+      <div class="muted">RECENT</div>
+      <div class="recent active">Project context</div>
+      <div class="recent">Meeting notes</div>
+      <div class="recent">Research ideas</div>
+      <div class="settings">⚙&nbsp; Preferences</div>
+    </aside>
+    <main class="main">
+      <header class="toolbar"><span class="title">Untitled</span><span class="tool">◷ History</span><span class="tool">▤ Sidebar</span></header>
+      <section class="content"><div class="heroIcon">✦</div><h1>Your local work memory</h1><p>Ask MacBrain about sources you choose to keep on your Mac.</p><div class="suggestions"><div class="suggestion">✦<b>Find something</b>Search your enabled local context.</div><div class="suggestion">⌁<b>Summarize context</b>Turn connected material into an answer.</div><div class="suggestion">▣<b>Manage sources</b>Review what MacBrain can access.</div></div></section>
+      <footer class="composerWrap"><div class="privacy">🔒 MacBrain stays local to your Mac</div><div class="composer"><div class="input">Ask MacBrain…</div><div class="bar">＋ <span style="margin-left:14px">Add context</span><button class="send">↑</button></div></div></footer>
+    </main>
+  </section>
+</body>
+</html>

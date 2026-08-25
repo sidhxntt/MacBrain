@@ -2,8 +2,8 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-APP_NAME="NotchBrain"
-BUNDLE_ID="com.notchbrain.app"
+APP_NAME="MacBrain"
+BUNDLE_ID="com.macbrain.app"
 MIN_SYSTEM_VERSION="14.0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -14,8 +14,8 @@ APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
-CLANG_CACHE_DIR="/tmp/notchbrain-clang-cache"
-SWIFTPM_CACHE_DIR="/tmp/notchbrain-swiftpm-cache"
+CLANG_CACHE_DIR="/tmp/macbrain-clang-cache"
+SWIFTPM_CACHE_DIR="/tmp/macbrain-swiftpm-cache"
 
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 
@@ -43,6 +43,11 @@ cat >"$INFO_PLIST" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSUIElement</key><true/>
   <key>LSMinimumSystemVersion</key><string>$MIN_SYSTEM_VERSION</string>
+  <key>NSAppleEventsUsageDescription</key><string>MacBrain uses Automation to sync Apple Notes and Apple Mail locally on this Mac.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key><string>MacBrain reads your Calendar locally to recall work context.</string>
+  <key>NSRemindersFullAccessUsageDescription</key><string>MacBrain reads your Reminders locally to recall work context.</string>
+  <key>NSContactsUsageDescription</key><string>MacBrain reads Contacts locally to identify people in your work context.</string>
+  <key>NSPhotoLibraryUsageDescription</key><string>MacBrain reads Photos metadata locally to recall work context; it does not import original media.</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict>
 </plist>

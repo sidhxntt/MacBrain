@@ -1,0 +1,30 @@
+<h2>MacBrain desktop layout</h2>
+<p class="subtitle">Recommended: native left navigation, same chat experience in main workspace, sidebar overlay stays optional.</p>
+
+<div class="cards">
+  <div class="card" data-choice="recommended" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:18px;background:#16181d;color:#e9eef5;min-height:240px;display:flex;gap:12px">
+      <aside style="width:28%;border:1px solid #424752;border-radius:12px;padding:12px;background:rgba(255,255,255,.04)">
+        <strong>MacBrain</strong><br><br>
+        <div style="padding:8px;background:#249d8f;border-radius:7px">＋ New chat</div><br>
+        <div>Chats</div><div>Sources</div><div>Preferences</div>
+        <hr><small>Recent chats</small><br><br><div>Untitled</div><div>Project notes</div>
+      </aside>
+      <main style="flex:1;border:1px solid #424752;border-radius:12px;padding:18px;display:flex;flex-direction:column">
+        <div style="display:flex;justify-content:space-between"><strong>Untitled</strong><span>History&nbsp;&nbsp; Open sidebar</span></div>
+        <div style="flex:1;display:flex;align-items:center;justify-content:center;text-align:center"><div><strong style="font-size:24px">Your local work memory</strong><br><small>Ask MacBrain about enabled sources.</small></div></div>
+        <div style="border:1px solid #4c5260;border-radius:12px;padding:12px;color:#a9b1bc">Ask MacBrain…<hr style="border-color:#3a3f48"><span>＋</span><span style="float:right">⌘ Return</span></div>
+      </main>
+    </div>
+    <div class="card-body"><h3>Desktop workspace</h3><p>Best fit. Standard Mac window, native navigation, Sources and Preferences visible, same shared chats as overlay.</p></div>
+  </div>
+  <div class="card" data-choice="compact" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:18px;background:#16181d;color:#e9eef5;min-height:240px;display:flex;gap:12px">
+      <aside style="width:17%;border:1px solid #424752;border-radius:12px;padding:12px;text-align:center">◎<br><br>＋<br><br>◷<br><br>⚙</aside>
+      <main style="flex:1;border:1px solid #424752;border-radius:12px;padding:18px;display:flex;flex-direction:column"><strong>Untitled</strong><div style="flex:1;display:flex;align-items:center;justify-content:center">Chat workspace</div><div style="border:1px solid #4c5260;border-radius:12px;padding:12px;color:#a9b1bc">Ask MacBrain…</div></main>
+    </div>
+    <div class="card-body"><h3>Compact launcher</h3><p>More room for chat. Sources and Preferences sit behind toolbar icons; less discoverable.</p></div>
+  </div>
+</div>
+
+<p class="subtitle">Click a layout if you have a preference. Recommended design keeps each main-window chat and optional sidebar on one shared history.</p>

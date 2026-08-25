@@ -23,7 +23,7 @@
 
 **Outcome:** The MVP is stable enough to measure with real users.
 
-**Files:** Existing MVP modules; add `docs/beta-metrics.md`, `NotchBrain/Diagnostics/DiagnosticsStore.swift`, and beta fixture projects.
+**Files:** Existing MVP modules; add `docs/beta-metrics.md`, `MacBrain/Diagnostics/DiagnosticsStore.swift`, and beta fixture projects.
 
 - [ ] Run the clean-machine acceptance flow from the MVP plan on multiple Apple-silicon Macs.
 - [ ] Record baseline metrics for first-run completion, index throughput, search latency, time-to-first-token, citation accuracy, memory pressure, and crash recovery.

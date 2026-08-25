@@ -2,13 +2,21 @@
 import PackageDescription
 
 let package = Package(
-    name: "NotchBrain",
+    name: "MacBrain",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "NotchBrain", targets: ["NotchBrain"])
+        .executable(name: "MacBrain", targets: ["MacBrain"])
     ],
     targets: [
-        .executableTarget(name: "NotchBrain"),
-        .testTarget(name: "NotchBrainTests", dependencies: ["NotchBrain"])
+        .executableTarget(
+            name: "MacBrain",
+            linkerSettings: [
+                .linkedFramework("EventKit"),
+                .linkedFramework("Contacts"),
+                .linkedFramework("Photos"),
+                .linkedFramework("PDFKit")
+            ]
+        ),
+        .testTarget(name: "MacBrainTests", dependencies: ["MacBrain"])
     ]
 )

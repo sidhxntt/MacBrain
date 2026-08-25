@@ -232,6 +232,35 @@ actor LocalSourceRepository {
             .map(\.document)
     }
 
+    func searchEvidence(
+        _ query: String,
+        using provider: any InferenceProvider,
+        embeddingModel: String,
+        limit: Int = 6
+    ) async -> EvidenceSearchResult {
+        if let database {
+            return (try? await HybridEvidenceRetriever(
+                database: database,
+                provider: provider,
+                embeddingModel: embeddingModel
+            ).search(query, limit: limit)) ?? .empty
+        }
+
+        let documents = await search(query, limit: limit)
+        let evidence = documents.enumerated().map { index, document in
+            RetrievalEvidence(
+                citationID: "S\(index + 1)", chunkID: UUID(), sourceTitle: document.title,
+                sourceType: record(id: document.connectorID)?.kind.rawValue ?? "local",
+                sourcePath: document.metadata["path"] ?? document.metadata["relativePath"] ?? document.externalID,
+                sourceDate: document.modifiedAt ?? document.createdAt,
+                excerpt: String(document.text.prefix(1_500)), startOffset: 0,
+                endOffset: min(document.text.utf16.count, 1_500), pageNumber: nil,
+                score: 1 / Double(index + 1)
+            )
+        }
+        return EvidenceSearchResult(evidence: evidence, isLowConfidence: evidence.isEmpty)
+    }
+
     func documentCount(for connectorID: UUID) -> Int {
         snapshot.documents.filter { $0.connectorID == connectorID }.count
     }

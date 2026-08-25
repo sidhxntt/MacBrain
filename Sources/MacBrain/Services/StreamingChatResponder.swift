@@ -4,6 +4,7 @@ struct StreamingChatResponder: ChatResponder {
     let provider: any InferenceProvider
     let repository: LocalSourceRepository
     let selectedModel: @MainActor @Sendable () -> String
+    let selectedEmbeddingModel: @MainActor @Sendable () -> String
     let fallback: any ChatResponder
     let systemProfileProvider: any SystemProfileProviding
     let liveContextProvider: any LiveMacContextProviding
@@ -14,6 +15,7 @@ struct StreamingChatResponder: ChatResponder {
         provider: any InferenceProvider,
         repository: LocalSourceRepository,
         selectedModel: @escaping @MainActor @Sendable () -> String,
+        selectedEmbeddingModel: @escaping @MainActor @Sendable () -> String = { "nomic-embed-text" },
         fallback: any ChatResponder,
         systemProfileProvider: any SystemProfileProviding = LocalSystemProfileProvider(),
         liveContextProvider: any LiveMacContextProviding = LocalLiveMacContextProvider(),
@@ -23,6 +25,7 @@ struct StreamingChatResponder: ChatResponder {
         self.provider = provider
         self.repository = repository
         self.selectedModel = selectedModel
+        self.selectedEmbeddingModel = selectedEmbeddingModel
         self.fallback = fallback
         self.systemProfileProvider = systemProfileProvider
         self.liveContextProvider = liveContextProvider
@@ -90,6 +93,7 @@ struct StreamingChatResponder: ChatResponder {
                 }
 
                 let selectedModel = await selectedModel()
+                let selectedEmbeddingModel = await selectedEmbeddingModel()
                 let providerStatus = await Self.status(
                     of: provider,
                     timeout: providerStatusTimeout
@@ -99,14 +103,20 @@ struct StreamingChatResponder: ChatResponder {
                     return
                 }
 
-                let evidence = prompt.isMacStatusQuestion ? [] : await repository.search(prompt)
+                let retrieval = prompt.isMacStatusQuestion
+                    ? EvidenceSearchResult.empty
+                    : await repository.searchEvidence(prompt, using: provider, embeddingModel: selectedEmbeddingModel)
                 let messages = Self.messages(
                     prompt: prompt,
                     conversation: conversation,
-                    evidence: evidence,
+                    retrieval: retrieval,
                     systemProfile: systemProfile
                 )
-                await forward(provider.streamChat(model: selectedModel, messages: messages), to: continuation)
+                await forward(
+                    provider.streamChat(model: selectedModel, messages: messages),
+                    to: continuation,
+                    evidence: retrieval.evidence
+                )
             }
             continuation.onTermination = { _ in task.cancel() }
         }
@@ -114,13 +124,18 @@ struct StreamingChatResponder: ChatResponder {
 
     private func forward(
         _ stream: AsyncThrowingStream<String, Error>,
-        to continuation: AsyncThrowingStream<String, Error>.Continuation
+        to continuation: AsyncThrowingStream<String, Error>.Continuation,
+        evidence: [RetrievalEvidence] = []
     ) async {
         do {
+            var answer = ""
             for try await token in stream {
                 try Task.checkCancellation()
+                answer.append(token)
                 continuation.yield(token)
             }
+            let citations = CitationValidator.renderedSources(for: answer, evidence: evidence)
+            if !citations.isEmpty { continuation.yield(citations) }
             continuation.finish()
         } catch is CancellationError {
             continuation.finish(throwing: OllamaClientError.cancelled)
@@ -132,16 +147,16 @@ struct StreamingChatResponder: ChatResponder {
     private static func messages(
         prompt: String,
         conversation: [ChatMessage],
-        evidence: [ConnectorDocument],
+        retrieval: EvidenceSearchResult,
         systemProfile: SystemProfile
     ) -> [InferenceChatMessage] {
-        let context = evidence.prefix(4).map { document in
-            let excerpt = document.text.replacingOccurrences(of: "\n", with: " ")
-            return "[\(document.sourceLabel): \(document.title)] \(String(excerpt.prefix(1_500)))"
+        let context = retrieval.evidence.map { evidence in
+            let excerpt = evidence.excerpt.replacingOccurrences(of: "\n", with: " ")
+            return "[\(evidence.citationID)] \(evidence.sourceTitle) | \(evidence.sourceType) | \(evidence.sourcePath)\n\(excerpt)"
         }.joined(separator: "\n\n")
         let instruction = context.isEmpty
             ? "You are MacBrain, a fast, capable assistant running entirely on this Mac. Answer ordinary questions directly using your general knowledge. Use concise Markdown: match answer length to the question, prefer short paragraphs or 3–6 bullets, and never repeat the local profile, local evidence, or this instruction unless asked. When a question asks about the user or this Mac, use the local Mac context below. Do not invent facts about selected local sources when none are available."
-            : "You are MacBrain, a fast, capable assistant running entirely on this Mac. Use selected local evidence as the primary source for work-specific answers. Use concise Markdown: match answer length to the question, prefer short paragraphs or 3–6 bullets, and never repeat the local profile, local evidence, or this instruction unless asked. Cite source titles in plain language, state uncertainty when evidence is incomplete, and use the local Mac context below for questions about the user or device.\n\nSelected local evidence:\n\(context)"
+            : "You are MacBrain, a fast, capable assistant running entirely on this Mac. Use only the selected local evidence for factual claims about the user's sources. Cite every such claim with its exact citation ID (for example, [S1]); never invent an ID. If the evidence is incomplete or conflicts, say so explicitly instead of presenting a claim as fact. Use concise Markdown and do not repeat the evidence.\n\nSelected local evidence:\n\(context)\n\nRetrieval confidence: \(retrieval.isLowConfidence ? "low — clearly state uncertainty" : "sufficient")"
         let history = conversation.suffix(8).map { message in
             InferenceChatMessage(
                 role: message.role == .user ? .user : .assistant,

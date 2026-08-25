@@ -16,6 +16,11 @@ struct LocalKnowledgeResponder: ChatResponder {
             return "• \(document.title) — \(String(excerpt.prefix(280)))\n  Source: \(document.sourceLabel)"
         }.joined(separator: "\n\n")
 
-        return "I found local evidence related to \"\(prompt)\":\n\n\(evidence)\n\nThese results stay on your Mac."
+        let graphEvidence = await repository.graphEvidence(for: prompt)
+        let graphSection = graphEvidence.isEmpty ? "" : "\n\nGraph-derived relationships (not direct excerpts):\n" + graphEvidence.map {
+            "• \($0.from.name) — \($0.relationship.type.rawValue.replacingOccurrences(of: "_", with: " ")) → \($0.to.name)"
+        }.joined(separator: "\n")
+
+        return "I found local evidence related to \"\(prompt)\":\n\n\(evidence)\(graphSection)\n\nThese results stay on your Mac."
     }
 }

@@ -61,8 +61,12 @@ actor IndexingJobCoordinator {
                 }
                 job.detail = "Embeddings saved for \(chunks.count) chunks."
             case .graphExtraction:
-                // The durable hook is intentionally retained until Phase 7 owns graph extraction.
-                job.detail = "Graph extraction queued for the Phase 7 graph pipeline."
+                // Deterministic evidence is extracted synchronously inside this durable background
+                // job. A local chat model may enrich ambiguous text in a later job pass; it is
+                // deliberately never invoked from search or the UI interaction path.
+                let chunks = try await database.chunks(ids: job.chunkIDs)
+                try await database.save(graph: DeterministicGraphExtractor().extract(from: chunks))
+                job.detail = "Graph facts saved for \(chunks.count) chunks."
             }
             job.state = .completed
             job.updatedAt = .now

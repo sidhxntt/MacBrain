@@ -76,6 +76,21 @@ struct ResponseCachingResponder: ChatResponder {
     let cache: any ResponseCaching
     let sourceRevisionProvider: any SourceRevisionProviding
     let selectedModel: @MainActor @Sendable () -> String
+    let queryPlanner: LocalQueryPlanner
+
+    init(
+        upstream: any ChatResponder,
+        cache: any ResponseCaching,
+        sourceRevisionProvider: any SourceRevisionProviding,
+        selectedModel: @escaping @MainActor @Sendable () -> String,
+        queryPlanner: LocalQueryPlanner = LocalQueryPlanner()
+    ) {
+        self.upstream = upstream
+        self.cache = cache
+        self.sourceRevisionProvider = sourceRevisionProvider
+        self.selectedModel = selectedModel
+        self.queryPlanner = queryPlanner
+    }
 
     func respond(to prompt: String) async throws -> String {
         var response = ""
@@ -96,7 +111,12 @@ struct ResponseCachingResponder: ChatResponder {
                     return
                 }
 
-                guard Self.isCacheable(prompt, conversation: conversation) else {
+                let plan = queryPlanner.plan(
+                    prompt: prompt,
+                    records: [],
+                    conversation: conversation
+                )
+                guard Self.isCacheable(plan, prompt: prompt) else {
                     await Self.forward(upstream.stream(to: prompt, conversation: conversation), to: continuation)
                     return
                 }
@@ -154,14 +174,14 @@ struct ResponseCachingResponder: ChatResponder {
         }
     }
 
-    private static func isCacheable(_ prompt: String, conversation: [ChatMessage]) -> Bool {
+    private static func isCacheable(_ plan: LocalQueryPlan, prompt: String) -> Bool {
         if LocalFileReadTool.isFileContentRequest(prompt) { return false }
-        if ChatQueryIntentRouter().route(prompt: prompt, conversation: conversation).intent == .liveMac {
+        switch plan {
+        case .system, .restricted, .connectorCapability, .connector:
             return false
+        case .evidenceSearch, .casual:
+            return true
         }
-        let normalized = prompt.lowercased()
-        let volatileTerms = ["current", "now", "today", "latest", "live", "who am i", "this mac", "my mac", "system configuration"]
-        return !volatileTerms.contains { normalized.contains($0) }
     }
 
     private static func isReusable(_ response: String) -> Bool {

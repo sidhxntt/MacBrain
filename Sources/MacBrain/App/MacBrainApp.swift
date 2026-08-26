@@ -27,7 +27,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         coordinator.start()
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
-        coordinator.stop()
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        Task { @MainActor [coordinator] in
+            await coordinator.stop()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 }

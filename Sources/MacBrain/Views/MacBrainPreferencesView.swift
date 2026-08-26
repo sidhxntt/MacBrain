@@ -11,6 +11,9 @@ struct MacBrainPreferencesView: View {
                 Button("Open Sidebar", systemImage: "rectangle.righthalf.inset.filled") {
                     coordinator.openSidebar()
                 }
+                Button("Run Setup Again", systemImage: "wand.and.stars") {
+                    coordinator.onboardingStore.reopen()
+                }
                 Text("Sidebar mode is optional. Your chats and enabled local sources stay shared with this desktop workspace.")
                     .font(.caption)
                     .foregroundStyle(.secondary)

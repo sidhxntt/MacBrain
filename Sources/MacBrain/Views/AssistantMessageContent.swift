@@ -38,18 +38,23 @@ struct AssistantMessageContent: View {
                         Text("[\(citation.citationID)] \(citation.title)")
                             .font(.caption.weight(.semibold))
                             .lineLimit(2)
-                        Button("Open source", systemImage: "arrow.up.forward.app") {
-                            NSWorkspace.shared.open(citation.url)
+                        Text(citation.sourceTypeDisplayName)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        if let url = citation.url {
+                            Button("Open source", systemImage: "arrow.up.forward.app") {
+                                NSWorkspace.shared.open(url)
+                            }
+                            .font(.caption)
+                            .buttonStyle(.borderless)
                         }
-                        .font(.caption)
-                        .buttonStyle(.borderless)
                     }
                     Spacer(minLength: 0)
                 }
                 .padding(8)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("Source \(citation.citationID): \(citation.title)")
+                .accessibilityLabel("Source \(citation.citationID), \(citation.sourceTypeDisplayName): \(citation.title)")
             }
         }
         .textSelection(.enabled)

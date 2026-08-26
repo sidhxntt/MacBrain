@@ -11,6 +11,36 @@ struct EvidenceAcceptance: Equatable, Sendable {
 struct EvidenceAcceptancePolicy: Sendable {
     func evaluate(
         prompt: String,
+        scope: Set<SourceConnectorKind>?,
+        lexical: EvidenceSearchResult
+    ) -> EvidenceAcceptance {
+        guard !lexical.evidence.isEmpty else {
+            return EvidenceAcceptance(accepted: false, reason: "no lexical evidence")
+        }
+        if scope != nil {
+            return EvidenceAcceptance(
+                accepted: true,
+                reason: "explicit source scope with available evidence"
+            )
+        }
+        if hasMatchingDistinctiveIdentifier(prompt: prompt, evidence: lexical.evidence) {
+            return EvidenceAcceptance(
+                accepted: true,
+                reason: "exact distinctive identifier matched"
+            )
+        }
+        if isClearlyPublicKnowledgeRequest(prompt),
+           !containsDistinctiveIdentifier(in: prompt) {
+            return EvidenceAcceptance(
+                accepted: false,
+                reason: "public knowledge form has no distinctive local identifier"
+            )
+        }
+        return evaluateImplicit(prompt: prompt, evidence: lexical.evidence)
+    }
+
+    func evaluate(
+        prompt: String,
         intent: ChatQueryIntent,
         lexical: EvidenceSearchResult
     ) -> EvidenceAcceptance {
@@ -23,12 +53,60 @@ struct EvidenceAcceptancePolicy: Sendable {
             return EvidenceAcceptance(accepted: true, reason: "explicit local request with available evidence")
         case .implicitLocal:
             return evaluateImplicit(prompt: prompt, evidence: lexical.evidence)
-        case .casual, .general, .liveMac, .restricted:
+        case .general:
+            guard containsDistinctiveIdentifier(in: prompt) else {
+                return EvidenceAcceptance(
+                    accepted: false,
+                    reason: "general request has no distinctive local identifier"
+                )
+            }
+            return evaluateImplicit(prompt: prompt, evidence: lexical.evidence)
+        case .casual, .liveMac, .restricted:
             return EvidenceAcceptance(accepted: false, reason: "intent does not permit local evidence")
         }
     }
 
+    private func containsDistinctiveIdentifier(in prompt: String) -> Bool {
+        !distinctiveIdentifiers(in: prompt).isEmpty
+    }
+
+    private func hasMatchingDistinctiveIdentifier(
+        prompt: String,
+        evidence: [RetrievalEvidence]
+    ) -> Bool {
+        let identifiers = distinctiveIdentifiers(in: prompt)
+        guard !identifiers.isEmpty else { return false }
+        let evidenceText = evidence.map {
+            [$0.sourceTitle, $0.sourcePath, $0.excerpt].joined(separator: " ")
+        }.joined(separator: " ").lowercased()
+        return identifiers.contains { evidenceText.contains($0.lowercased()) }
+    }
+
+    private func distinctiveIdentifiers(in text: String) -> [String] {
+        let pattern = #"\b(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+\b"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..., in: text)
+        return expression.matches(in: text, range: range).compactMap { match in
+            guard let matchRange = Range(match.range, in: text) else { return nil }
+            return String(text[matchRange])
+        }
+    }
+
+    private func isClearlyPublicKnowledgeRequest(_ prompt: String) -> Bool {
+        let normalized = SourceVocabulary.normalize(prompt).text
+        return [
+            "what is ", "what are ", "who is ", "who are ", "define ", "explain ",
+            "how does ", "how do ", "teach me ", "write ", "translate ",
+        ].contains { normalized.hasPrefix($0) }
+    }
+
     private func evaluateImplicit(prompt: String, evidence: [RetrievalEvidence]) -> EvidenceAcceptance {
+        if hasMatchingDistinctiveIdentifier(prompt: prompt, evidence: evidence) {
+            return EvidenceAcceptance(
+                accepted: true,
+                reason: "exact distinctive identifier matched"
+            )
+        }
         let queryTokens = contentTokens(in: prompt)
         guard !queryTokens.isEmpty else {
             return EvidenceAcceptance(accepted: false, reason: "no significant query terms")

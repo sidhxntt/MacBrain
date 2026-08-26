@@ -337,7 +337,7 @@ struct ConnectorRecord: Codable, Identifiable, Equatable, Sendable {
         kind: SourceConnectorKind,
         displayName: String,
         configuration: SourceConnectorConfiguration,
-        status: ConnectorStatus = .ready,
+        status: ConnectorStatus = .syncing,
         lastSuccessfulSync: Date? = nil,
         lastError: String? = nil,
         documentCount: Int = 0,

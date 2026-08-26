@@ -5,12 +5,14 @@ import Foundation
 final class SourceLibraryStore: ObservableObject {
     private static let automaticRefreshInterval: Duration = .seconds(300)
     @Published private(set) var records: [ConnectorRecord] = []
+    @Published private(set) var indexHealthBySourceID: [UUID: ConnectorIndexHealth] = [:]
     @Published private(set) var syncActivity: [SourceSyncActivity] = []
     @Published private(set) var nextAutomaticRefresh: Date?
     @Published var alertMessage: String?
     @Published private var syncingRecordIDs = Set<UUID>()
     @Published private var syncingKinds = Set<SourceConnectorKind>()
-    private var automaticRefreshTask: Task<Void, Never>?
+    private var automaticRefreshStartTask: Task<Void, Never>?
+    private var refreshScheduler: ConnectorRefreshScheduler?
     private var indexingProvider: (any InferenceProvider)?
     private var selectedEmbeddingModel: (() -> String)?
 
@@ -34,11 +36,14 @@ final class SourceLibraryStore: ObservableObject {
     }
 
     deinit {
-        automaticRefreshTask?.cancel()
+        automaticRefreshStartTask?.cancel()
     }
 
     func reload() async {
-        records = await coordinator.records()
+        async let loadedRecords = coordinator.records()
+        async let loadedHealth = repository.sourceHealth()
+        records = await loadedRecords
+        indexHealthBySourceID = await loadedHealth
     }
 
     func processQueuedIndexing(using provider: any InferenceProvider, embeddingModel: String) async {
@@ -54,50 +59,51 @@ final class SourceLibraryStore: ObservableObject {
     }
 
     func startAutomaticRefresh() {
-        automaticRefreshTask?.cancel()
+        automaticRefreshStartTask?.cancel()
         nextAutomaticRefresh = .now.addingTimeInterval(300)
-        automaticRefreshTask = Task { [weak self] in
-            guard let self else { return }
-            await self.coordinator.recoverInterruptedSyncs()
-            await self.reload()
-            await self.retryAuthorizationNeededSources()
-
-            while !Task.isCancelled {
-                self.nextAutomaticRefresh = .now.addingTimeInterval(300)
-                do {
-                    try await Task.sleep(for: Self.automaticRefreshInterval)
-                } catch {
-                    return
-                }
-                guard !Task.isCancelled else { return }
-                await self.refreshConnectedSourcesIfDue()
-            }
+        automaticRefreshStartTask = Task { [weak self] in
+            await self?.startAutomaticRefreshAfterRecovery()
         }
     }
 
+    func startAutomaticRefreshAndWait() async {
+        automaticRefreshStartTask?.cancel()
+        automaticRefreshStartTask = nil
+        nextAutomaticRefresh = .now.addingTimeInterval(300)
+        await startAutomaticRefreshAfterRecovery()
+    }
+
     func stopAutomaticRefresh() {
-        automaticRefreshTask?.cancel()
-        automaticRefreshTask = nil
+        automaticRefreshStartTask?.cancel()
+        automaticRefreshStartTask = nil
+        let scheduler = refreshScheduler
+        refreshScheduler = nil
         nextAutomaticRefresh = nil
+        Task { await scheduler?.stop() }
+    }
+
+    func stopAutomaticRefreshAndWait() async {
+        automaticRefreshStartTask?.cancel()
+        automaticRefreshStartTask = nil
+        let scheduler = refreshScheduler
+        refreshScheduler = nil
+        nextAutomaticRefresh = nil
+        await scheduler?.stop()
     }
 
     func refreshConnectedSourcesNow() async {
         await reload()
         let candidates = records.filter {
-            ($0.status == .ready || $0.status == .failed) && !syncingRecordIDs.contains($0.id)
+            ($0.status == .ready || $0.status == .failed || $0.status == .syncing)
+                && !syncingRecordIDs.contains($0.id)
         }
         await refresh(candidates)
     }
 
     func refreshConnectedSourcesIfDue(referenceDate: Date = .now) async {
+        await refreshSchedulerInstance().runDueRefresh(referenceDate: referenceDate)
+        await processIndexingIfConfigured()
         await reload()
-        let refreshInterval = Self.automaticRefreshInterval.components.seconds
-        let candidates = records.filter { record in
-            guard (record.status == .ready || record.status == .failed), !syncingRecordIDs.contains(record.id) else { return false }
-            guard let lastSuccessfulSync = record.lastSuccessfulSync else { return true }
-            return referenceDate.timeIntervalSince(lastSuccessfulSync) >= Double(refreshInterval)
-        }
-        await refresh(candidates)
     }
 
     /// A source can retain the permission-needed status after the user changes a
@@ -143,6 +149,7 @@ final class SourceLibraryStore: ObservableObject {
                 }
                 defer { refreshTask.cancel() }
                 _ = try await self.coordinator.sync(id: record.id)
+                await self.processIndexingIfConfigured()
             } catch {
                 self.alertMessage = error.localizedDescription
                 if let recordID, let record = await self.record(id: recordID) {
@@ -324,44 +331,68 @@ final class SourceLibraryStore: ObservableObject {
         }
     }
 
-    private func refreshAutomatically(_ record: ConnectorRecord) async {
-        guard !syncingRecordIDs.contains(record.id) else { return }
-        syncingRecordIDs.insert(record.id)
-        appendActivity(for: record, state: .syncing, detail: "Background refresh started")
-        if let index = records.firstIndex(where: { $0.id == record.id }) {
-            records[index].status = .syncing
-            records[index].lastError = nil
-        }
-        defer {
-            syncingRecordIDs.remove(record.id)
-        }
-
-        do {
-            let refreshed = try await coordinator.sync(id: record.id)
-            let count = "\(refreshed.documentCount) \(refreshed.documentCount == 1 ? "item" : "items")"
-            appendActivity(for: refreshed, state: .completed, detail: "Background refresh complete · \(count)")
-        } catch is CancellationError {
-            return
-        } catch {
-            appendActivity(for: record, state: .needsAttention, detail: activityDetail(for: error))
-        }
+    private func refresh(_ candidates: [ConnectorRecord]) async {
+        guard !candidates.isEmpty else { return }
+        await refreshSchedulerInstance().runRefresh(candidates)
+        await processIndexingIfConfigured()
         await reload()
     }
 
-    private func refresh(_ candidates: [ConnectorRecord]) async {
-        guard !candidates.isEmpty else { return }
-        await withTaskGroup(of: Void.self) { group in
-            for record in candidates where !Task.isCancelled {
-                group.addTask { [weak self, record] in
-                    guard let self else { return }
-                    await self.refreshAutomatically(record)
-                }
+    private func startAutomaticRefreshAfterRecovery() async {
+        await coordinator.recoverInterruptedSyncs()
+        guard !Task.isCancelled else { return }
+        await reload()
+        await retryAuthorizationNeededSources()
+        guard !Task.isCancelled else { return }
+        await refreshSchedulerInstance().start()
+    }
+
+    private func refreshSchedulerInstance() -> ConnectorRefreshScheduler {
+        if let refreshScheduler { return refreshScheduler }
+        let coordinator = self.coordinator
+        let scheduler = ConnectorRefreshScheduler(
+            interval: Self.automaticRefreshInterval,
+            maximumConcurrentRefreshes: 3,
+            loadCandidates: { await coordinator.records() },
+            refresh: { record in try await coordinator.sync(id: record.id) },
+            onEvent: { [weak self] event in
+                await self?.handleRefreshEvent(event)
             }
-            await group.waitForAll()
+        )
+        refreshScheduler = scheduler
+        return scheduler
+    }
+
+    private func handleRefreshEvent(_ event: ConnectorRefreshEvent) async {
+        switch event {
+        case .scheduled(let date):
+            nextAutomaticRefresh = date
+        case .started(let sourceID):
+            guard let record = await record(id: sourceID) else { return }
+            syncingRecordIDs.insert(sourceID)
+            appendActivity(for: record, state: .syncing, detail: "Background refresh started")
+            if let index = records.firstIndex(where: { $0.id == sourceID }) {
+                records[index].status = .syncing
+                records[index].lastError = nil
+            }
+        case .succeeded(let sourceID, let documentCount):
+            syncingRecordIDs.remove(sourceID)
+            await reload()
+            guard let record = records.first(where: { $0.id == sourceID }) else { return }
+            let count = "\(documentCount) \(documentCount == 1 ? "item" : "items")"
+            appendActivity(for: record, state: .completed, detail: "Background refresh complete · \(count)")
+        case .failed(let sourceID, _):
+            syncingRecordIDs.remove(sourceID)
+            await reload()
+            guard let record = records.first(where: { $0.id == sourceID }) else { return }
+            let detail = record.status == .needsAuthorization
+                ? "Authorization required"
+                : "Refresh needs attention"
+            appendActivity(for: record, state: .needsAttention, detail: detail)
+        case .stopped:
+            syncingRecordIDs.removeAll()
+            nextAutomaticRefresh = nil
         }
-        // Connector scans remain parallel, while the durable indexing queue is
-        // consumed once after all source commits have settled.
-        await processIndexingIfConfigured()
     }
 
     private func processIndexingIfConfigured() async {

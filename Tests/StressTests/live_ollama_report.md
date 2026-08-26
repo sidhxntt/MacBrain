@@ -1,4 +1,6 @@
-# Live Ollama soak report
+# Live Ollama Connector and Soak Report
+
+Status: Current-tree pass. The live fixtures use the same verified SQLite generation boundary as production retrieval.
 
 Date: 2026-08-26  
 Chat model: `qwen3:8b`  
@@ -6,34 +8,27 @@ Embedding model: `nomic-embed-text`
 
 ## Result
 
-- Ollama health, model discovery, embedding generation, visible chat streaming, and injected Mac-context checks passed.
-- 16/16 production prompts completed; 0 timed out, failed, hung, or remained pending.
-- Source-markup and raw-evidence contamination checks: 0 failures.
-- Bounded generation concurrency: 2.
-- A synthetic connected-source query returned its known owner/date with a valid `[S1]` card and no evidence fallback in 0.685 s.
-- Time to first token: 0.446 s average, 0.102 s median, 2.864 s maximum.
-- Total prompt latency: 1.245 s average, 0.825 s median, 3.893 s maximum.
-- Entire live integration suite: 4 tests passed in 15.085 s.
+- Full suite: 5 tests passed, 0 failures, in 76.094 seconds.
+- Connector answer-quality matrix: 66/66 cases passed (`11 connectors × 6 dimensions`).
+- Production soak: 16/16 prompts completed.
+- Health, model discovery, embedding generation, visible streaming, injected Mac context, and synthetic folder grounding passed.
+- Bounded connector generation concurrency: 2; per-case deadline: 60 seconds.
+- Every live connector case reached `.completed`. No case timed out, hung, leaked a forbidden marker, used the wrong connector type, or emitted an invalid citation.
+- Answer paths were reported separately: 47 model-authored answers, 8 verified-evidence fallbacks after the model omitted a required field or valid citation, and 11 deterministic permission-state answers. All 66 final user-visible answers satisfied their fact, freshness, citation, permission, and isolation assertions.
 
-## Per-case latency
+Command:
 
-| Label | Route | First token | Total |
-|---|---|---:|---:|
-| casual | casual | 0.102 s | 0.844 s |
-| coding | general | 0.325 s | 0.805 s |
-| explicit-empty | explicitLocal | 0.005 s | 0.005 s |
-| filesystem | general | 1.412 s | 3.893 s |
-| implicit-empty | implicitLocal | 0.101 s | 1.035 s |
-| live-memory | liveMac | <0.001 s | <0.001 s |
-| logic | general | 2.864 s | 3.444 s |
-| macos-howto | general | 0.100 s | 1.320 s |
-| math | general | 0.100 s | 0.185 s |
-| privacy | restricted | <0.001 s | <0.001 s |
-| public-source-term | general | 0.100 s | 2.770 s |
-| science | general | 0.936 s | 1.761 s |
-| summary | general | 0.101 s | 0.515 s |
-| translation | general | 0.106 s | 0.233 s |
-| unicode | general | 0.608 s | 2.334 s |
-| writing | general | 0.278 s | 0.777 s |
+```sh
+env MACBRAIN_LIVE_OLLAMA=1 \
+  CLANG_MODULE_CACHE_PATH=/private/tmp/macbrain-live-clang-cache \
+  SWIFTPM_MODULECACHE_OVERRIDE=/private/tmp/macbrain-live-swiftpm-cache \
+  swift test --filter OllamaLiveIntegrationTests
+```
 
-The report records stable case labels and routes rather than private prompt or source text. Model-quality assertions are intentionally separate from routing/runtime assertions; this run verified non-empty bounded output and terminal behavior, not frontier-model factual equivalence.
+The test logs one `LIVE_CONNECTOR_AUDIT` record per matrix cell and one `LIVE_SOAK` record per production prompt, including stable case ID, route, answer path, first-token latency, total latency, and terminal state. It deliberately does not log private prompt or connector content.
+
+## What the live matrix checks
+
+For each connector, the final response must reproduce every requested controlled fact, retain the expected connector type and known citation, prefer the current marker, refuse inaccessible evidence, and exclude a same-token decoy in another connector. Model-authored output is accepted only with known citations and all required facts; otherwise MacBrain intentionally renders bounded evidence from the verified retrieval result and records that path separately.
+
+The first current-tree attempt failed immediately because this live harness still used the legacy `replaceDocuments` seeding path. The hardened retriever correctly rejected those unverified rows. The harness now commits ready records and documents together with `commitSourceGeneration`, matching the production searchable-state invariant; a targeted Notes case passed before the complete rerun.

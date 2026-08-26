@@ -90,7 +90,7 @@ final class OllamaLiveIntegrationTests: XCTestCase {
         )
         let record = ConnectorRecord(kind: .folder, displayName: "Synthetic live fixture", configuration: .init())
         try await repository.save(record)
-        _ = try await repository.replaceDocuments(for: record.id, with: [
+        let documents = [
             ConnectorDocument(
                 connectorID: record.id,
                 externalID: "aurora-live.md",
@@ -99,7 +99,15 @@ final class OllamaLiveIntegrationTests: XCTestCase {
                 sourceLabel: "Synthetic live fixture",
                 metadata: ["path": "/tmp/aurora-live.md"]
             )
-        ])
+        ]
+        var verifiedRecord = record
+        verifiedRecord.configuration.initialSyncCompleted = true
+        verifiedRecord.status = .ready
+        verifiedRecord.lastSuccessfulSync = .now
+        _ = try await repository.commitSourceGeneration(
+            record: verifiedRecord,
+            documents: documents
+        )
         let responder = StreamingChatResponder(
             provider: OllamaProvider(client: OllamaClient(retryLimit: 0, firstTokenTimeout: .seconds(20))),
             repository: repository,
@@ -122,6 +130,117 @@ final class OllamaLiveIntegrationTests: XCTestCase {
         XCTAssertTrue(response.contains("September 15, 2026"))
         XCTAssertEqual(ChatCitationCard.parse(from: response).map(\.citationID), ["S1"])
         XCTAssertFalse(response.contains("couldn't verify a grounded answer"))
+    }
+
+    func testEveryConnectorPreservesGroundingAcrossTheLiveAdversarialMatrix() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["MACBRAIN_LIVE_OLLAMA"] == "1",
+            "Set MACBRAIN_LIVE_OLLAMA=1 to exercise the local Ollama service."
+        )
+
+        let client = OllamaClient(retryLimit: 0, firstTokenTimeout: .seconds(30))
+        try await client.health()
+        let models = try await client.models().map(\.name)
+        XCTAssertTrue(models.contains(Self.chatModel), "Missing live chat model \(Self.chatModel)")
+        XCTAssertTrue(models.contains(Self.embeddingModel), "Missing live embedding model \(Self.embeddingModel)")
+
+        let variants: [ConnectorAuditDimension: Int] = [
+            .facts: 2,
+            .sourceType: 1,
+            .citations: 2,
+            .freshness: 0,
+            .permissions: 0,
+            .crossSourceIsolation: 1,
+        ]
+        let allCases = ConnectorAdversarialMatrix.fixtures.flatMap { fixture in
+            ConnectorAuditDimension.allCases.map { dimension in
+                LiveConnectorAuditCase(
+                    id: "\(fixture.kind.rawValue).\(dimension.rawValue).live",
+                    fixture: fixture,
+                    dimension: dimension,
+                    variant: variants[dimension] ?? 0
+                )
+            }
+        }
+        XCTAssertEqual(allCases.count, SourceConnectorKind.allCases.count * ConnectorAuditDimension.allCases.count)
+        let requestedCase = ProcessInfo.processInfo.environment["MACBRAIN_LIVE_CONNECTOR_CASE"]
+        let cases = requestedCase.map { requested in
+            allCases.filter { $0.id == requested }
+        } ?? allCases
+        XCTAssertFalse(cases.isEmpty, "No live connector audit case matched \(requestedCase ?? "the requested filter")")
+
+        var outcomes: [LiveConnectorAuditOutcome] = []
+        for start in stride(from: 0, to: cases.count, by: 2) {
+            let batch = Array(cases[start..<min(start + 2, cases.count)])
+            let batchOutcomes = await withTaskGroup(of: LiveConnectorAuditOutcome.self) { group in
+                for item in batch {
+                    group.addTask { await Self.runLiveConnectorAuditCase(item) }
+                }
+                var collected: [LiveConnectorAuditOutcome] = []
+                for await outcome in group { collected.append(outcome) }
+                return collected
+            }
+            outcomes.append(contentsOf: batchOutcomes)
+        }
+
+        XCTAssertEqual(outcomes.count, cases.count)
+        for outcome in outcomes.sorted(by: { $0.item.id < $1.item.id }) {
+            XCTAssertEqual(outcome.actualIntent, .explicitLocal, outcome.item.id)
+            guard case .completed(let response, let firstTokenDuration) = outcome.terminal else {
+                XCTFail("Live connector audit did not complete: \(outcome.item.id) -> \(outcome.terminal)")
+                continue
+            }
+            if ProcessInfo.processInfo.environment["MACBRAIN_LIVE_CONNECTOR_LOG_RESPONSES"] == "1" {
+                print("LIVE_CONNECTOR_RESPONSE case=\(outcome.item.id)\n\(response)\nEND_LIVE_CONNECTOR_RESPONSE")
+            }
+
+            let fixture = outcome.item.fixture
+            if outcome.item.dimension == .permissions {
+                for marker in [fixture.currentMarker, fixture.staleMarker, fixture.freshMarker, fixture.decoyMarker] {
+                    XCTAssertFalse(response.contains(marker), "\(outcome.item.id) disclosed \(marker)")
+                }
+                XCTAssertTrue(ChatCitationCard.parse(from: response).isEmpty, "\(outcome.item.id) cited revoked evidence")
+            } else {
+                switch outcome.item.dimension {
+                case .facts:
+                    for fact in fixture.expectedFacts {
+                        XCTAssertTrue(response.contains(fact), "\(outcome.item.id) omitted \(fact)")
+                    }
+                case .citations, .freshness, .crossSourceIsolation:
+                    XCTAssertTrue(response.contains(outcome.expectedMarker), "\(outcome.item.id) omitted \(outcome.expectedMarker)")
+                case .sourceType, .permissions:
+                    break
+                }
+                for marker in outcome.forbiddenMarkers {
+                    XCTAssertFalse(response.contains(marker), "\(outcome.item.id) leaked \(marker)")
+                }
+                let cards = ChatCitationCard.parse(from: response)
+                XCTAssertEqual(cards.count, 1, "\(outcome.item.id) rendered the wrong citation count")
+                if let card = cards.first {
+                    XCTAssertEqual(card.citationID, "S1", outcome.item.id)
+                    XCTAssertEqual(card.sourceType, fixture.kind.rawValue, outcome.item.id)
+                    XCTAssertTrue(card.title.contains(fixture.title), outcome.item.id)
+                    XCTAssertEqual(card.url, outcome.expectedURL, outcome.item.id)
+                }
+                XCTAssertFalse(response.contains("couldn't verify a grounded answer"), outcome.item.id)
+            }
+
+            let answerPath: String
+            if outcome.item.dimension == .permissions {
+                answerPath = "permission-state"
+            } else if response.hasPrefix("Here is the matching local evidence:") {
+                answerPath = "verified-evidence-fallback"
+            } else {
+                answerPath = "model"
+            }
+
+            print(
+                "LIVE_CONNECTOR_AUDIT case=\(outcome.item.id) route=\(outcome.actualIntent.rawValue) "
+                    + "answer_path=\(answerPath) "
+                    + "first_token_ms=\(String(format: "%.0f", firstTokenDuration?.milliseconds ?? 0)) "
+                    + "duration_ms=\(String(format: "%.0f", outcome.duration.milliseconds)) terminal=completed"
+            )
+        }
     }
 
     func testProductionPromptSoakUsesBoundedParallelismAndTerminates() async throws {
@@ -210,13 +329,86 @@ final class OllamaLiveIntegrationTests: XCTestCase {
         }
     }
 
-    private static var soakProfile: SystemProfile {
+    fileprivate static var soakProfile: SystemProfile {
         SystemProfile(
             userDisplayName: "Alex", computerName: "Alex’s MacBook Pro", hardwareModel: "Mac16,7",
             processor: "Apple M5 Pro", memoryBytes: 24_000_000_000, operatingSystem: "macOS 26.0",
             totalDiskBytes: 1_000_000_000_000, availableDiskBytes: 512_000_000_000,
             localeIdentifier: "en_IN", timeZoneIdentifier: "Asia/Kolkata"
         )
+    }
+
+    private static func runLiveConnectorAuditCase(
+        _ item: LiveConnectorAuditCase
+    ) async -> LiveConnectorAuditOutcome {
+        let startedAt = ContinuousClock.now
+        do {
+            let environment = try LiveConnectorAuditEnvironment()
+            defer { environment.removeTemporaryFiles() }
+            let fixture = item.fixture
+            let decoy = ConnectorAdversarialMatrix.decoy(for: fixture.kind)
+            var expectedMarker = fixture.currentMarker
+            var forbiddenMarkers = [fixture.staleMarker, fixture.freshMarker, fixture.decoyMarker]
+
+            switch item.dimension {
+            case .facts, .sourceType, .citations, .crossSourceIsolation:
+                _ = try await environment.seed(fixture, marker: fixture.currentMarker)
+                _ = try await environment.seed(
+                    decoy,
+                    marker: fixture.decoyMarker,
+                    lookupToken: fixture.lookupToken
+                )
+            case .freshness:
+                let record = try await environment.seed(fixture, marker: fixture.staleMarker)
+                _ = try await environment.seed(
+                    decoy,
+                    marker: fixture.decoyMarker,
+                    lookupToken: fixture.lookupToken
+                )
+                _ = try await environment.replace(fixture, record: record, marker: fixture.freshMarker)
+                expectedMarker = fixture.freshMarker
+                forbiddenMarkers = [fixture.staleMarker, fixture.currentMarker, fixture.decoyMarker]
+            case .permissions:
+                _ = try await environment.seed(
+                    decoy,
+                    marker: fixture.decoyMarker,
+                    lookupToken: fixture.lookupToken
+                )
+                var record = try await environment.seed(fixture, marker: fixture.currentMarker)
+                record.status = .needsAuthorization
+                record.lastError = "Controlled live permission denial"
+                try await environment.repository.save(record)
+            }
+
+            let prompt = item.prompt
+            let intent = ChatQueryIntentRouter().route(prompt: prompt, conversation: []).intent
+            let terminal = await collect(
+                environment.responder(
+                    chatModel: chatModel,
+                    embeddingModel: embeddingModel
+                ).stream(to: prompt),
+                timeout: .seconds(60)
+            )
+            return LiveConnectorAuditOutcome(
+                item: item,
+                actualIntent: intent,
+                duration: startedAt.duration(to: .now),
+                terminal: terminal,
+                expectedMarker: expectedMarker,
+                forbiddenMarkers: forbiddenMarkers,
+                expectedURL: fixture.expectedURL(in: environment.directory)
+            )
+        } catch {
+            return LiveConnectorAuditOutcome(
+                item: item,
+                actualIntent: .general,
+                duration: startedAt.duration(to: .now),
+                terminal: .failed(String(describing: error)),
+                expectedMarker: item.fixture.currentMarker,
+                forbiddenMarkers: [],
+                expectedURL: nil
+            )
+        }
     }
 
     private static func collect(
@@ -259,6 +451,118 @@ final class OllamaLiveIntegrationTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory.appendingPathComponent("sources.json")
+    }
+}
+
+private struct LiveConnectorAuditCase: Sendable {
+    let id: String
+    let fixture: ConnectorAdversarialFixture
+    let dimension: ConnectorAuditDimension
+    let variant: Int
+
+    var prompt: String {
+        let source = fixture.sourceReferences[variant]
+        switch dimension {
+        case .facts:
+            return "Search \(source) for \(fixture.lookupToken). Report every labeled fact in that record except the lookup key, including the Marker, and preserve every value exactly."
+        case .sourceType:
+            return "Search \(source) for \(fixture.lookupToken). Identify the exact record and connector source type."
+        case .citations:
+            return "What exact Marker is recorded for \(fixture.lookupToken) in \(source)? Cite the record that proves it."
+        case .freshness:
+            return "Check \(source) now. What is the current Marker value for \(fixture.lookupToken)? Do not reuse an earlier value."
+        case .permissions:
+            return fixture.prompt(for: dimension, variant: variant)
+        case .crossSourceIsolation:
+            return "Using only \(source), what Marker is recorded for \(fixture.lookupToken)? Ignore same-token records in every other connector."
+        }
+    }
+}
+
+private struct LiveConnectorAuditOutcome: Sendable {
+    let item: LiveConnectorAuditCase
+    let actualIntent: ChatQueryIntent
+    let duration: Duration
+    let terminal: LiveSoakTerminal
+    let expectedMarker: String
+    let forbiddenMarkers: [String]
+    let expectedURL: URL?
+}
+
+private struct LiveConnectorAuditEnvironment {
+    let directory: URL
+    let repository: LocalSourceRepository
+
+    init() throws {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacBrainLiveConnectorAudit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let database = try MacBrainDatabase(url: directory.appendingPathComponent("macbrain.sqlite"))
+        repository = LocalSourceRepository(
+            fileURL: directory.appendingPathComponent("sources.json"),
+            database: database
+        )
+    }
+
+    func seed(
+        _ fixture: ConnectorAdversarialFixture,
+        marker: String,
+        lookupToken: String? = nil
+    ) async throws -> ConnectorRecord {
+        let record = ConnectorRecord(
+            kind: fixture.kind,
+            displayName: fixture.displayName,
+            configuration: .init()
+        )
+        try await repository.save(record)
+        return try await replace(fixture, record: record, marker: marker, lookupToken: lookupToken)
+    }
+
+    func replace(
+        _ fixture: ConnectorAdversarialFixture,
+        record: ConnectorRecord,
+        marker: String,
+        lookupToken: String? = nil
+    ) async throws -> ConnectorRecord {
+        let document = fixture.document(
+            connectorID: record.id,
+            marker: marker,
+            lookupToken: lookupToken,
+            rootDirectory: directory
+        )
+        if let url = fixture.expectedURL(in: directory), url.isFileURL {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data(document.text.utf8).write(to: url, options: .atomic)
+        }
+        var verifiedRecord = record
+        verifiedRecord.configuration.initialSyncCompleted = true
+        verifiedRecord.status = .ready
+        verifiedRecord.lastSuccessfulSync = .now
+        _ = try await repository.commitSourceGeneration(
+            record: verifiedRecord,
+            documents: [document]
+        )
+        return verifiedRecord
+    }
+
+    func responder(chatModel: String, embeddingModel: String) -> StreamingChatResponder {
+        StreamingChatResponder(
+            provider: OllamaProvider(client: OllamaClient(retryLimit: 0, firstTokenTimeout: .seconds(30))),
+            repository: repository,
+            selectedModel: { chatModel },
+            selectedEmbeddingModel: { embeddingModel },
+            fallback: LocalMockChatResponder(),
+            systemProfileProvider: LiveTestSystemProfileProvider(profile: OllamaLiveIntegrationTests.soakProfile),
+            providerStatusTimeout: .seconds(5),
+            retrievalTimeout: .seconds(10)
+        )
+    }
+
+    func removeTemporaryFiles() {
+        try? FileManager.default.removeItem(at: directory)
     }
 }
 

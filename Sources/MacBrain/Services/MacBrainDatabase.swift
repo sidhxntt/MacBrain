@@ -1,7 +1,9 @@
 import Foundation
+import OSLog
 import SQLite3
 
 enum DatabaseWriteFailurePoint: Sendable { case afterDocument }
+enum SourceGenerationFailurePoint: Sendable { case afterDocuments }
 
 enum MacBrainDatabaseError: LocalizedError, Equatable, Sendable {
     case openFailed(String)
@@ -18,9 +20,15 @@ enum MacBrainDatabaseError: LocalizedError, Equatable, Sendable {
     }
 }
 
-actor MacBrainDatabase: VectorStore {
-    static let currentSchemaVersion = 10
+struct DatabaseSourceRevisionState: Sendable {
+    let records: [ConnectorRecord]
+    let health: [ConnectorIndexHealth]
+}
 
+actor MacBrainDatabase: VectorStore {
+    static let currentSchemaVersion = 13
+
+    private let logger = Logger(subsystem: "com.macbrain.app", category: "connector-index")
     private let connection: SQLiteConnection
     private(set) var schemaVersion = 0
 
@@ -86,6 +94,280 @@ actor MacBrainDatabase: VectorStore {
         return try JSONDecoder().decode(ConnectorRecord.self, from: row.data("record_json"))
     }
 
+    func allConnectorRecords() throws -> [ConnectorRecord] {
+        try ensureMigrated()
+        return try connection.rows(
+            "SELECT record_json FROM source_records ORDER BY source_id"
+        ).map { row in
+            try JSONDecoder().decode(ConnectorRecord.self, from: row.data("record_json"))
+        }
+    }
+
+    func save(indexHealth: ConnectorIndexHealth) throws {
+        try ensureMigrated()
+        try connection.execute(
+            """
+            INSERT INTO source_index_state(
+                source_id, document_count, chunk_count, content_revision,
+                initial_sync_completed, last_successful_sync, last_verified_at, last_error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET
+                document_count = excluded.document_count,
+                chunk_count = excluded.chunk_count,
+                content_revision = excluded.content_revision,
+                initial_sync_completed = excluded.initial_sync_completed,
+                last_successful_sync = excluded.last_successful_sync,
+                last_verified_at = excluded.last_verified_at,
+                last_error = excluded.last_error
+            """,
+            indexHealth.bindings
+        )
+    }
+
+    func indexHealth(sourceID: UUID) throws -> ConnectorIndexHealth? {
+        try ensureMigrated()
+        guard let row = try connection.row(
+            """
+            SELECT source_id, document_count, chunk_count, content_revision,
+                   initial_sync_completed, last_successful_sync, last_verified_at, last_error
+            FROM source_index_state WHERE source_id = ?
+            """,
+            [.text(sourceID.uuidString)]
+        ) else { return nil }
+        return try ConnectorIndexHealth(row: row)
+    }
+
+    func allIndexHealth() throws -> [UUID: ConnectorIndexHealth] {
+        try ensureMigrated()
+        let rows = try connection.rows(
+            """
+            SELECT source_id, document_count, chunk_count, content_revision,
+                   initial_sync_completed, last_successful_sync, last_verified_at, last_error
+            FROM source_index_state
+            """
+        )
+        return Dictionary(uniqueKeysWithValues: try rows.map { row in
+            let health = try ConnectorIndexHealth(row: row)
+            return (health.sourceID, health)
+        })
+    }
+
+    func sourceRevisionState() throws -> DatabaseSourceRevisionState {
+        try ensureMigrated()
+        return DatabaseSourceRevisionState(
+            records: try allConnectorRecords(),
+            health: Array(try allIndexHealth().values)
+        )
+    }
+
+    func verifiedIndexHealth(sourceID: UUID) throws -> ConnectorIndexHealth? {
+        try ensureMigrated()
+        guard let health = try indexHealth(sourceID: sourceID), health.isSearchable else {
+            return nil
+        }
+        let counts = try sourceIndexCounts(sourceID: sourceID)
+        guard counts.documentCount == health.documentCount,
+              counts.chunkCount == health.chunkCount,
+              counts.ftsCount == counts.chunkCount else {
+            return nil
+        }
+        return health
+    }
+
+    func sourceIndexIsIntact(sourceID: UUID, expectedDocumentCount: Int) throws -> Bool {
+        try ensureMigrated()
+        let counts = try sourceIndexCounts(sourceID: sourceID)
+        return counts.documentCount == expectedDocumentCount
+            && counts.ftsCount == counts.chunkCount
+    }
+
+    func setMetadata(_ key: String, value: String) throws {
+        try ensureMigrated()
+        try connection.execute(
+            "INSERT INTO app_metadata(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [.text(key), .text(value)]
+        )
+    }
+
+    func metadata(_ key: String) throws -> String? {
+        try ensureMigrated()
+        return try connection.row(
+            "SELECT value FROM app_metadata WHERE key = ?",
+            [.text(key)]
+        )?.text("value")
+    }
+
+    func commitSourceGeneration(
+        record: ConnectorRecord,
+        documents: [StoredDocument],
+        health: ConnectorIndexHealth,
+        failurePoint: SourceGenerationFailurePoint? = nil
+    ) throws -> ConnectorIndexHealth {
+        try ensureMigrated()
+        guard record.id == health.sourceID,
+              documents.allSatisfy({ $0.sourceID == record.id }) else {
+            throw MacBrainDatabaseError.sqlite("A source generation contained mismatched source identifiers.")
+        }
+
+        var committedHealth = health
+        try connection.transaction {
+            // The parent row must exist before documents can satisfy their
+            // foreign key. The transaction still rolls this write back with
+            // the generation if any subsequent verification fails.
+            try save(
+                source: StoredSource(
+                    id: record.id,
+                    kind: record.kind.rawValue,
+                    displayName: record.displayName,
+                    updatedAt: record.lastSuccessfulSync ?? .now
+                )
+            )
+            try replaceSourceDocumentsInTransaction(sourceID: record.id, documents: documents)
+            if failurePoint == .afterDocuments {
+                throw MacBrainDatabaseError.injectedFailure
+            }
+
+            let sourceBinding: [SQLiteValue] = [.text(record.id.uuidString)]
+            let documentCount = try connection.integer(
+                "SELECT COUNT(*) FROM documents WHERE source_id = ? AND is_deleted = 0",
+                sourceBinding
+            )
+            let chunkCount = try connection.integer(
+                """
+                SELECT COUNT(*)
+                FROM chunks c
+                JOIN documents d ON d.id = c.document_id
+                WHERE c.source_id = ? AND c.is_deleted = 0 AND d.is_deleted = 0
+                """,
+                sourceBinding
+            )
+            let ftsCount = try connection.integer(
+                """
+                SELECT COUNT(*)
+                FROM chunks c
+                JOIN documents d ON d.id = c.document_id
+                JOIN chunks_fts_content f ON f.c0 = c.id
+                WHERE c.source_id = ? AND c.is_deleted = 0 AND d.is_deleted = 0
+                """,
+                sourceBinding
+            )
+            guard ftsCount == chunkCount else {
+                throw MacBrainDatabaseError.sqlite(
+                    "The source index verification found \(chunkCount) chunks but \(ftsCount) search rows."
+                )
+            }
+
+            committedHealth.documentCount = documentCount
+            committedHealth.chunkCount = chunkCount
+
+            var committedRecord = record
+            committedRecord.documentCount = documentCount
+            try save(connectorRecord: committedRecord)
+            try save(indexHealth: committedHealth)
+        }
+        return committedHealth
+    }
+
+    /// Commits a file-backed generation from its changed documents and the
+    /// complete set of external IDs observed by the scan. Unchanged document
+    /// bodies stay in SQLite and are never decoded into application memory.
+    func commitReconciledSourceGeneration(
+        record: ConnectorRecord,
+        changedDocuments: [StoredDocument],
+        presentExternalIDs: [String],
+        health: ConnectorIndexHealth
+    ) throws -> ConnectorIndexHealth {
+        try ensureMigrated()
+        guard record.id == health.sourceID,
+              changedDocuments.allSatisfy({ $0.sourceID == record.id }) else {
+            throw MacBrainDatabaseError.sqlite("A reconciled source generation contained mismatched source identifiers.")
+        }
+
+        let presentIDs = Set(presentExternalIDs)
+        var changedByExternalID: [String: StoredDocument] = [:]
+        for document in changedDocuments {
+            changedByExternalID[document.externalID] = document
+        }
+        guard Set(changedByExternalID.keys).isSubset(of: presentIDs) else {
+            throw MacBrainDatabaseError.sqlite("A reconciled source generation changed a document that was not present in the completed scan.")
+        }
+
+        var committedHealth = health
+        let reconciliationStartedAt = Date.now
+        try connection.transaction {
+            try save(
+                source: StoredSource(
+                    id: record.id,
+                    kind: record.kind.rawValue,
+                    displayName: record.displayName,
+                    updatedAt: record.lastSuccessfulSync ?? .now
+                )
+            )
+
+            let existingRows = try connection.rows(
+                "SELECT id, external_id, content_hash, created_at, modified_at, metadata FROM documents WHERE source_id = ? AND is_deleted = 0",
+                [.text(record.id.uuidString)]
+            )
+            let existingByExternalID = Dictionary(
+                uniqueKeysWithValues: try existingRows.map { row in
+                    (try row.text("external_id"), ExistingSourceDocument(
+                        id: try row.text("id"),
+                        contentHash: try row.text("content_hash"),
+                        createdAt: row.optionalDate("created_at"),
+                        modifiedAt: row.optionalDate("modified_at"),
+                        metadata: row.stringDictionary("metadata")
+                    ))
+                }
+            )
+
+            let removed = existingByExternalID
+                .filter { presentIDs.contains($0.key) == false }
+                .map(\.value)
+            let changed = changedByExternalID.values.filter { document in
+                guard let existing = existingByExternalID[document.externalID] else {
+                    return true
+                }
+                return Self.requiresDocumentReplacement(existing: existing, incoming: document)
+            }
+            logger.notice(
+                "Reconcile plan: \(record.kind.rawValue, privacy: .public), changed \(changed.count, privacy: .public), removed \(removed.count, privacy: .public), present \(presentIDs.count, privacy: .public), elapsed_ms \(Int(Date.now.timeIntervalSince(reconciliationStartedAt) * 1_000), privacy: .public)"
+            )
+
+            try deleteSourceDocuments(
+                removed + changed.compactMap { existingByExternalID[$0.externalID] }
+            )
+            let deletionFinishedAt = Date.now
+            logger.notice(
+                "Reconcile deletion complete: \(record.kind.rawValue, privacy: .public), elapsed_ms \(Int(deletionFinishedAt.timeIntervalSince(reconciliationStartedAt) * 1_000), privacy: .public)"
+            )
+            try insertSourceDocuments(changed)
+            let insertionFinishedAt = Date.now
+            logger.notice(
+                "Reconcile insertion complete: \(record.kind.rawValue, privacy: .public), elapsed_ms \(Int(insertionFinishedAt.timeIntervalSince(deletionFinishedAt) * 1_000), privacy: .public)"
+            )
+
+            let counts = try sourceIndexCounts(sourceID: record.id)
+            guard counts.ftsCount == counts.chunkCount else {
+                throw MacBrainDatabaseError.sqlite(
+                    "The source index verification found \(counts.chunkCount) chunks but \(counts.ftsCount) search rows."
+                )
+            }
+
+            committedHealth.documentCount = counts.documentCount
+            committedHealth.chunkCount = counts.chunkCount
+            committedHealth.contentRevision = try sourceContentRevision(sourceID: record.id)
+
+            var committedRecord = record
+            committedRecord.documentCount = counts.documentCount
+            try save(connectorRecord: committedRecord)
+            try save(indexHealth: committedHealth)
+        }
+        logger.notice(
+            "Reconcile verified: \(record.kind.rawValue, privacy: .public), documents \(committedHealth.documentCount, privacy: .public), chunks \(committedHealth.chunkCount, privacy: .public), elapsed_ms \(Int(Date.now.timeIntervalSince(reconciliationStartedAt) * 1_000), privacy: .public)"
+        )
+        return committedHealth
+    }
+
     func source(id: UUID) throws -> StoredSource? {
         try ensureMigrated()
         guard let row = try connection.row("SELECT id, kind, display_name, created_at, updated_at FROM sources WHERE id = ?", [.text(id.uuidString)]) else { return nil }
@@ -107,10 +389,11 @@ actor MacBrainDatabase: VectorStore {
             try connection.execute(
                 """
                 DELETE FROM chunks_fts
-                WHERE chunk_id IN (
-                    SELECT c.id
+                WHERE rowid IN (
+                    SELECT f.id
                     FROM chunks c
                     JOIN documents d ON d.id = c.document_id
+                    JOIN chunks_fts_content f ON f.c0 = c.id
                     WHERE d.source_id = ?
                 )
                 """,
@@ -132,7 +415,7 @@ actor MacBrainDatabase: VectorStore {
                 .compactMap { try? $0.text("id") }
             for chunkID in oldChunkIDs {
                 try deleteGraphFacts(provenanceChunkID: chunkID)
-                try connection.execute("DELETE FROM chunks_fts WHERE chunk_id = ?", [.text(chunkID)])
+                try deleteFTSRow(chunkID: chunkID)
             }
             try connection.execute("DELETE FROM chunks WHERE document_id = ?", [.text(document.id.uuidString)])
 
@@ -165,52 +448,7 @@ actor MacBrainDatabase: VectorStore {
     func replaceSourceDocuments(sourceID: UUID, documents: [StoredDocument]) throws {
         try ensureMigrated()
         try connection.transaction {
-            let existingRows = try connection.rows(
-                "SELECT id, external_id, content_hash, modified_at FROM documents WHERE source_id = ?",
-                [.text(sourceID.uuidString)]
-            )
-            let existingByExternalID = Dictionary(
-                uniqueKeysWithValues: try existingRows.map { row in
-                    (try row.text("external_id"), ExistingSourceDocument(
-                        id: try row.text("id"),
-                        contentHash: try row.text("content_hash"),
-                        modifiedAt: row.optionalDate("modified_at")
-                    ))
-                }
-            )
-            let incomingExternalIDs = Set(documents.map(\.externalID))
-            let removed = existingByExternalID.filter { !incomingExternalIDs.contains($0.key) }.map(\.value)
-            let changed = documents.filter { document in
-                guard let existing = existingByExternalID[document.externalID] else { return true }
-                return existing.contentHash != document.contentHash || existing.modifiedAt != document.modifiedAt
-            }
-
-            for existing in removed + changed.compactMap({ existingByExternalID[$0.externalID] }) {
-                let chunkIDs = try connection.rows("SELECT id FROM chunks WHERE document_id = ?", [.text(existing.id)])
-                    .compactMap { try? $0.text("id") }
-                for chunkID in chunkIDs {
-                    try deleteGraphFacts(provenanceChunkID: chunkID)
-                    try connection.execute("DELETE FROM chunks_fts WHERE chunk_id = ?", [.text(chunkID)])
-                }
-                try connection.execute("DELETE FROM documents WHERE id = ?", [.text(existing.id)])
-            }
-
-            for document in changed {
-                try connection.execute(
-                    "INSERT INTO documents(id, source_id, external_id, title, text, source_label, content_hash, created_at, modified_at, is_deleted, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    document.bindings
-                )
-                for chunk in DocumentChunker().chunks(for: document) {
-                    try connection.execute(
-                        "INSERT INTO chunks(id, document_id, source_id, text, start_offset, end_offset, page_number, line_start, line_end, is_deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
-                        chunk.bindings
-                    )
-                    try connection.execute(
-                        "INSERT INTO chunks_fts(chunk_id, normalized_text) VALUES (?, ?)",
-                        [.text(chunk.id.uuidString), .text(searchableText(for: chunk, document: document))]
-                    )
-                }
-            }
+            try replaceSourceDocumentsInTransaction(sourceID: sourceID, documents: documents)
         }
     }
 
@@ -222,7 +460,7 @@ actor MacBrainDatabase: VectorStore {
         guard !documents.isEmpty else { return }
         try connection.transaction {
             let existingRows = try connection.rows(
-                "SELECT id, external_id, content_hash, modified_at FROM documents WHERE source_id = ?",
+                "SELECT id, external_id, content_hash, created_at, modified_at, metadata FROM documents WHERE source_id = ?",
                 [.text(sourceID.uuidString)]
             )
             let existingByExternalID = Dictionary(
@@ -230,13 +468,18 @@ actor MacBrainDatabase: VectorStore {
                     (try row.text("external_id"), ExistingSourceDocument(
                         id: try row.text("id"),
                         contentHash: try row.text("content_hash"),
-                        modifiedAt: row.optionalDate("modified_at")
+                        createdAt: row.optionalDate("created_at"),
+                        modifiedAt: row.optionalDate("modified_at"),
+                        metadata: row.stringDictionary("metadata")
                     ))
                 }
             )
             let changed = documents.filter { document in
                 guard let existing = existingByExternalID[document.externalID] else { return true }
-                return existing.contentHash != document.contentHash || existing.modifiedAt != document.modifiedAt
+                return existing.contentHash != document.contentHash
+                    || existing.createdAt != document.createdAt
+                    || existing.modifiedAt != document.modifiedAt
+                    || existing.metadata != document.metadata
             }
 
             for document in changed {
@@ -245,7 +488,7 @@ actor MacBrainDatabase: VectorStore {
                         .compactMap { try? $0.text("id") }
                     for chunkID in chunkIDs {
                         try deleteGraphFacts(provenanceChunkID: chunkID)
-                        try connection.execute("DELETE FROM chunks_fts WHERE chunk_id = ?", [.text(chunkID)])
+                        try deleteFTSRow(chunkID: chunkID)
                     }
                     try connection.execute("DELETE FROM documents WHERE id = ?", [.text(existing.id)])
                 }
@@ -274,32 +517,158 @@ actor MacBrainDatabase: VectorStore {
         return try StoredDocument(row: row)
     }
 
+    func documents(sourceID: UUID) throws -> [StoredDocument] {
+        try ensureMigrated()
+        return try connection.rows(
+            """
+            SELECT id, source_id, external_id, title, text, source_label, content_hash,
+                   created_at, modified_at, is_deleted, metadata
+            FROM documents
+            WHERE source_id = ? AND is_deleted = 0
+            ORDER BY external_id
+            """,
+            [.text(sourceID.uuidString)]
+        ).map(StoredDocument.init(row:))
+    }
+
+    func documentCount(sourceIDs: Set<UUID>) throws -> Int {
+        try ensureMigrated()
+        guard !sourceIDs.isEmpty else { return 0 }
+        let orderedSourceIDs = sourceIDs.sorted { $0.uuidString < $1.uuidString }
+        let placeholders = Array(repeating: "?", count: orderedSourceIDs.count)
+            .joined(separator: ",")
+        return try connection.integer(
+            "SELECT COUNT(*) FROM documents WHERE is_deleted = 0 AND source_id IN (\(placeholders))",
+            orderedSourceIDs.map { .text($0.uuidString) }
+        )
+    }
+
+    func documents(
+        sourceIDs: Set<UUID>,
+        ascending: Bool,
+        limit: Int
+    ) throws -> [StoredDocument] {
+        try ensureMigrated()
+        guard !sourceIDs.isEmpty else { return [] }
+        let orderedSourceIDs = sourceIDs.sorted { $0.uuidString < $1.uuidString }
+        let placeholders = Array(repeating: "?", count: orderedSourceIDs.count)
+            .joined(separator: ",")
+        let direction = ascending ? "ASC" : "DESC"
+        let rows = try connection.rows(
+            """
+            SELECT id, source_id, external_id, title, text, source_label, content_hash,
+                   created_at, modified_at, is_deleted, metadata
+            FROM documents
+            WHERE is_deleted = 0 AND source_id IN (\(placeholders))
+            ORDER BY COALESCE(modified_at, created_at, 0) \(direction), external_id ASC
+            LIMIT ?
+            """,
+            orderedSourceIDs.map { .text($0.uuidString) }
+                + [.integer(min(max(limit, 1), 100))]
+        )
+        return try rows.map(StoredDocument.init(row:))
+    }
+
+    func documents(
+        sourceIDs: Set<UUID>,
+        metadataDateKey: String,
+        after: Date?,
+        metadataEquals: [String: String],
+        ascending: Bool,
+        limit: Int
+    ) throws -> [StoredDocument] {
+        try ensureMigrated()
+        guard !sourceIDs.isEmpty else { return [] }
+        guard Self.isSafeMetadataKey(metadataDateKey),
+              metadataEquals.keys.allSatisfy(Self.isSafeMetadataKey) else {
+            throw MacBrainDatabaseError.sqlite("A structured source query used an invalid metadata key.")
+        }
+
+        let orderedSourceIDs = sourceIDs.sorted { $0.uuidString < $1.uuidString }
+        let placeholders = Array(repeating: "?", count: orderedSourceIDs.count)
+            .joined(separator: ",")
+        let datePath = "$.\(metadataDateKey)"
+        let dateExpression = "json_extract(CAST(metadata AS TEXT), ?)"
+        var predicates = [
+            "is_deleted = 0",
+            "source_id IN (\(placeholders))",
+            "\(dateExpression) IS NOT NULL",
+            "\(dateExpression) != ''",
+        ]
+        var bindings = orderedSourceIDs.map { SQLiteValue.text($0.uuidString) }
+        bindings.append(.text(datePath))
+        bindings.append(.text(datePath))
+        if let after {
+            predicates.append("\(dateExpression) > ?")
+            bindings.append(.text(datePath))
+            bindings.append(.text(after.ISO8601Format()))
+        }
+        for (key, value) in metadataEquals.sorted(by: { $0.key < $1.key }) {
+            predicates.append("json_extract(CAST(metadata AS TEXT), ?) = ?")
+            bindings.append(.text("$.\(key)"))
+            bindings.append(.text(value))
+        }
+        let direction = ascending ? "ASC" : "DESC"
+        bindings.append(.text(datePath))
+        bindings.append(.integer(min(max(limit, 1), 100)))
+
+        let rows = try connection.rows(
+            """
+            SELECT id, source_id, external_id, title, text, source_label, content_hash,
+                   created_at, modified_at, is_deleted, metadata
+            FROM documents
+            WHERE \(predicates.joined(separator: " AND "))
+            ORDER BY \(dateExpression) \(direction), external_id ASC
+            LIMIT ?
+            """,
+            bindings
+        )
+        return try rows.map(StoredDocument.init(row:))
+    }
+
     func searchChunks(
         matching query: String,
         limit: Int = 10,
-        matchAllTerms: Bool = true
+        matchAllTerms: Bool = true,
+        sourceIDs: Set<UUID>? = nil
     ) throws -> [StoredChunk] {
         try ensureMigrated()
+        if sourceIDs?.isEmpty == true { return [] }
         let expression = matchAllTerms ? query.searchExpression : query.broadSearchExpression
         guard !expression.isEmpty else { return [] }
+        let orderedSourceIDs = sourceIDs?.sorted { $0.uuidString < $1.uuidString } ?? []
+        let sourceClause = orderedSourceIDs.isEmpty
+            ? ""
+            : " AND c.source_id IN (\(Array(repeating: "?", count: orderedSourceIDs.count).joined(separator: ",")))"
         let rows = try connection.rows(
             """
             SELECT c.id, c.document_id, c.source_id, c.text, c.start_offset, c.end_offset, c.page_number, c.line_start, c.line_end
             FROM chunks_fts
             JOIN chunks c ON c.id = chunks_fts.chunk_id
-            WHERE chunks_fts MATCH ? AND c.is_deleted = 0
+            WHERE chunks_fts MATCH ? AND c.is_deleted = 0\(sourceClause)
             ORDER BY rank
             LIMIT ?
             """,
-            [.text(expression), .integer(limit)]
+            [.text(expression)]
+                + orderedSourceIDs.map { .text($0.uuidString) }
+                + [.integer(limit)]
         )
         return try rows.map(StoredChunk.init(row:))
     }
 
-    func searchDocuments(matching query: String, limit: Int = 5) throws -> [StoredDocument] {
+    func searchDocuments(
+        matching query: String,
+        limit: Int = 5,
+        sourceIDs: Set<UUID>? = nil
+    ) throws -> [StoredDocument] {
         try ensureMigrated()
+        if sourceIDs?.isEmpty == true { return [] }
         let expression = query.searchExpression
         guard !expression.isEmpty else { return [] }
+        let orderedSourceIDs = sourceIDs?.sorted { $0.uuidString < $1.uuidString } ?? []
+        let sourceClause = orderedSourceIDs.isEmpty
+            ? ""
+            : " AND d.source_id IN (\(Array(repeating: "?", count: orderedSourceIDs.count).joined(separator: ",")))"
         let rows = try connection.rows(
             """
             SELECT d.id, d.source_id, d.external_id, d.title, d.text, d.source_label, d.content_hash,
@@ -307,11 +676,13 @@ actor MacBrainDatabase: VectorStore {
             FROM chunks_fts
             JOIN chunks c ON c.id = chunks_fts.chunk_id
             JOIN documents d ON d.id = c.document_id
-            WHERE chunks_fts MATCH ? AND c.is_deleted = 0 AND d.is_deleted = 0
+            WHERE chunks_fts MATCH ? AND c.is_deleted = 0 AND d.is_deleted = 0\(sourceClause)
             ORDER BY rank
             LIMIT ?
             """,
-            [.text(expression), .integer(limit)]
+            [.text(expression)]
+                + orderedSourceIDs.map { .text($0.uuidString) }
+                + [.integer(limit)]
         )
         return try rows.map(StoredDocument.init(row:))
     }
@@ -325,10 +696,21 @@ actor MacBrainDatabase: VectorStore {
         try nearestChunks(to: vector, limit: limit).map(\.id)
     }
 
-    func nearestChunks(to vector: [Float], limit: Int) throws -> [StoredChunk] {
+    func nearestChunks(
+        to vector: [Float],
+        limit: Int,
+        sourceIDs: Set<UUID>? = nil
+    ) throws -> [StoredChunk] {
         try ensureMigrated()
-        guard !vector.isEmpty else { return [] }
-        let embeddings = try connection.rows("SELECT chunk_id, vector FROM embeddings")
+        guard !vector.isEmpty, sourceIDs?.isEmpty != true else { return [] }
+        let orderedSourceIDs = sourceIDs?.sorted { $0.uuidString < $1.uuidString } ?? []
+        let sourceClause = orderedSourceIDs.isEmpty
+            ? ""
+            : " WHERE c.source_id IN (\(Array(repeating: "?", count: orderedSourceIDs.count).joined(separator: ",")))"
+        let embeddings = try connection.rows(
+            "SELECT e.chunk_id, e.vector FROM embeddings e JOIN chunks c ON c.id = e.chunk_id\(sourceClause)",
+            orderedSourceIDs.map { .text($0.uuidString) }
+        )
         let scored = try embeddings.compactMap { row -> (UUID, Double)? in
             let chunkID = try row.uuid("chunk_id")
             let stored = try JSONDecoder().decode([Float].self, from: try row.data("vector"))
@@ -343,10 +725,18 @@ actor MacBrainDatabase: VectorStore {
 
     /// Returns a small, secondary evidence set that shares an extracted entity with direct matches.
     /// Direct FTS/vector candidates remain primary; this becomes useful after graph extraction runs.
-    func graphRelatedChunks(to chunkIDs: [UUID], limit: Int = 4) throws -> [StoredChunk] {
+    func graphRelatedChunks(
+        to chunkIDs: [UUID],
+        limit: Int = 4,
+        sourceIDs: Set<UUID>? = nil
+    ) throws -> [StoredChunk] {
         try ensureMigrated()
-        guard !chunkIDs.isEmpty else { return [] }
+        guard !chunkIDs.isEmpty, sourceIDs?.isEmpty != true else { return [] }
         let placeholders = Array(repeating: "?", count: chunkIDs.count).joined(separator: ",")
+        let orderedSourceIDs = sourceIDs?.sorted { $0.uuidString < $1.uuidString } ?? []
+        let sourceClause = orderedSourceIDs.isEmpty
+            ? ""
+            : " AND c.source_id IN (\(Array(repeating: "?", count: orderedSourceIDs.count).joined(separator: ",")))"
         let rows = try connection.rows(
             """
             SELECT DISTINCT c.id, c.document_id, c.source_id, c.text, c.start_offset, c.end_offset, c.page_number, c.line_start, c.line_end
@@ -356,9 +746,12 @@ actor MacBrainDatabase: VectorStore {
             JOIN documents d ON d.id = c.document_id
             WHERE seed.chunk_id IN (\(placeholders))
               AND c.is_deleted = 0 AND d.is_deleted = 0
+              \(sourceClause)
             LIMIT ?
             """,
-            chunkIDs.map { .text($0.uuidString) } + [.integer(limit)]
+            chunkIDs.map { .text($0.uuidString) }
+                + orderedSourceIDs.map { .text($0.uuidString) }
+                + [.integer(limit)]
         )
         return try rows.map(StoredChunk.init(row:))
     }
@@ -368,7 +761,7 @@ actor MacBrainDatabase: VectorStore {
         try connection.transaction {
             try deleteGraphFacts(provenanceChunkID: chunkID.uuidString)
             try connection.execute("DELETE FROM embeddings WHERE chunk_id = ?", [.text(chunkID.uuidString)])
-            try connection.execute("DELETE FROM chunks_fts WHERE chunk_id = ?", [.text(chunkID.uuidString)])
+            try deleteFTSRow(chunkID: chunkID.uuidString)
             try connection.execute("DELETE FROM chunks WHERE id = ?", [.text(chunkID.uuidString)])
         }
     }
@@ -595,6 +988,204 @@ actor MacBrainDatabase: VectorStore {
         }
     }
 
+    private static func requiresDocumentReplacement(
+        existing: ExistingSourceDocument,
+        incoming: StoredDocument
+    ) -> Bool {
+        existing.contentHash != incoming.contentHash
+            || existing.createdAt != incoming.createdAt
+            || existing.modifiedAt != incoming.modifiedAt
+            || existing.metadata != incoming.metadata
+    }
+
+    private func deleteSourceDocument(_ existing: ExistingSourceDocument) throws {
+        try deleteSourceDocuments([existing])
+    }
+
+    private func deleteSourceDocuments(_ documents: [ExistingSourceDocument]) throws {
+        guard !documents.isEmpty else { return }
+        try connection.withPreparedStatement(
+            """
+            DELETE FROM chunks_fts
+            WHERE rowid IN (
+                SELECT f.id
+                FROM chunks c
+                JOIN chunks_fts_content f ON f.c0 = c.id
+                WHERE c.document_id = ?
+            )
+            """
+        ) { deleteFTS in
+            try connection.withPreparedStatement(
+                "DELETE FROM relationships WHERE provenance_chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)"
+            ) { deleteRelationships in
+                try connection.withPreparedStatement(
+                    "DELETE FROM mentions WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)"
+                ) { deleteMentions in
+                    try connection.withPreparedStatement(
+                        "DELETE FROM documents WHERE id = ?"
+                    ) { deleteDocument in
+                        for document in documents {
+                            let binding: [SQLiteValue] = [.text(document.id)]
+                            try deleteFTS(binding)
+                            try deleteRelationships(binding)
+                            try deleteMentions(binding)
+                            try deleteDocument(binding)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func insertSourceDocument(_ document: StoredDocument) throws {
+        try insertSourceDocuments([document])
+    }
+
+    private func insertSourceDocuments(_ documents: [StoredDocument]) throws {
+        guard !documents.isEmpty else { return }
+        try connection.withPreparedStatement(
+            "INSERT INTO documents(id, source_id, external_id, title, text, source_label, content_hash, created_at, modified_at, is_deleted, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ) { insertDocument in
+            try connection.withPreparedStatement(
+                "INSERT INTO chunks(id, document_id, source_id, text, start_offset, end_offset, page_number, line_start, line_end, is_deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)"
+            ) { insertChunk in
+                try connection.withPreparedStatement(
+                    "INSERT INTO chunks_fts(chunk_id, normalized_text) VALUES (?, ?)"
+                ) { insertFTS in
+                    for document in documents {
+                        try insertDocument(document.bindings)
+                        for chunk in DocumentChunker().chunks(for: document) {
+                            try insertChunk(chunk.bindings)
+                            try insertFTS([
+                                .text(chunk.id.uuidString),
+                                .text(searchableText(for: chunk, document: document))
+                            ])
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func sourceContentRevision(sourceID: UUID) throws -> String {
+        let entries = try connection.rows(
+            "SELECT external_id, content_hash, created_at, modified_at, metadata FROM documents WHERE source_id = ? AND is_deleted = 0",
+            [.text(sourceID.uuidString)]
+        ).map { row in
+            SourceContentRevisionEntry(
+                externalID: try row.text("external_id"),
+                contentHash: try row.text("content_hash"),
+                createdAt: row.optionalDate("created_at"),
+                modifiedAt: row.optionalDate("modified_at"),
+                metadata: row.stringDictionary("metadata")
+            )
+        }
+        return SourceContentRevision.digest(entries)
+    }
+
+    private func replaceSourceDocumentsInTransaction(
+        sourceID: UUID,
+        documents: [StoredDocument]
+    ) throws {
+        let existingRows = try connection.rows(
+            "SELECT id, external_id, content_hash, created_at, modified_at, metadata FROM documents WHERE source_id = ?",
+            [.text(sourceID.uuidString)]
+        )
+        let existingByExternalID = Dictionary(
+            uniqueKeysWithValues: try existingRows.map { row in
+                (try row.text("external_id"), ExistingSourceDocument(
+                    id: try row.text("id"),
+                    contentHash: try row.text("content_hash"),
+                    createdAt: row.optionalDate("created_at"),
+                    modifiedAt: row.optionalDate("modified_at"),
+                    metadata: row.stringDictionary("metadata")
+                ))
+            }
+        )
+        let incomingExternalIDs = Set(documents.map(\.externalID))
+        let removed = existingByExternalID
+            .filter { !incomingExternalIDs.contains($0.key) }
+            .map(\.value)
+        let changed = documents.filter { document in
+            guard let existing = existingByExternalID[document.externalID] else { return true }
+            return existing.contentHash != document.contentHash
+                || existing.createdAt != document.createdAt
+                || existing.modifiedAt != document.modifiedAt
+                || existing.metadata != document.metadata
+        }
+
+        for existing in removed + changed.compactMap({ existingByExternalID[$0.externalID] }) {
+            let chunkIDs = try connection.rows(
+                "SELECT id FROM chunks WHERE document_id = ?",
+                [.text(existing.id)]
+            ).compactMap { try? $0.text("id") }
+            for chunkID in chunkIDs {
+                try deleteGraphFacts(provenanceChunkID: chunkID)
+                try deleteFTSRow(chunkID: chunkID)
+            }
+            try connection.execute(
+                "DELETE FROM documents WHERE id = ?",
+                [.text(existing.id)]
+            )
+        }
+
+        for document in changed {
+            try connection.execute(
+                "INSERT INTO documents(id, source_id, external_id, title, text, source_label, content_hash, created_at, modified_at, is_deleted, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                document.bindings
+            )
+            for chunk in DocumentChunker().chunks(for: document) {
+                try connection.execute(
+                    "INSERT INTO chunks(id, document_id, source_id, text, start_offset, end_offset, page_number, line_start, line_end, is_deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                    chunk.bindings
+                )
+                try connection.execute(
+                    "INSERT INTO chunks_fts(chunk_id, normalized_text) VALUES (?, ?)",
+                    [
+                        .text(chunk.id.uuidString),
+                        .text(searchableText(for: chunk, document: document))
+                    ]
+                )
+            }
+        }
+    }
+
+    private func sourceIndexCounts(sourceID: UUID) throws -> SourceIndexCounts {
+        let sourceBinding: [SQLiteValue] = [.text(sourceID.uuidString)]
+        return try SourceIndexCounts(
+            documentCount: connection.integer(
+                "SELECT COUNT(*) FROM documents WHERE source_id = ? AND is_deleted = 0",
+                sourceBinding
+            ),
+            chunkCount: connection.integer(
+                """
+                SELECT COUNT(*)
+                FROM chunks c
+                JOIN documents d ON d.id = c.document_id
+                WHERE c.source_id = ? AND c.is_deleted = 0 AND d.is_deleted = 0
+                """,
+                sourceBinding
+            ),
+            ftsCount: connection.integer(
+                """
+                SELECT COUNT(*)
+                FROM chunks c
+                JOIN documents d ON d.id = c.document_id
+                JOIN chunks_fts_content f ON f.c0 = c.id
+                WHERE c.source_id = ? AND c.is_deleted = 0 AND d.is_deleted = 0
+                """,
+                sourceBinding
+            )
+        )
+    }
+
+    private func deleteFTSRow(chunkID: String) throws {
+        try connection.execute(
+            "DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks_fts_content WHERE c0 = ?)",
+            [.text(chunkID)]
+        )
+    }
+
     private func insert(_ embedding: StoredEmbedding) throws {
         try connection.execute(
             "INSERT INTO embeddings(chunk_id, vector, index_identifier, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(chunk_id) DO UPDATE SET vector = excluded.vector, index_identifier = excluded.index_identifier, updated_at = excluded.updated_at",
@@ -645,6 +1236,10 @@ actor MacBrainDatabase: VectorStore {
             .normalizedForSearch
     }
 
+    nonisolated private static func isSafeMetadataKey(_ key: String) -> Bool {
+        !key.isEmpty && key.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
+    }
+
     private func ensureMigrated() throws {
         if schemaVersion != Self.currentSchemaVersion { try migrate() }
     }
@@ -659,7 +1254,15 @@ actor MacBrainDatabase: VectorStore {
 private struct ExistingSourceDocument {
     let id: String
     let contentHash: String
+    let createdAt: Date?
     let modifiedAt: Date?
+    let metadata: [String: String]
+}
+
+private struct SourceIndexCounts {
+    let documentCount: Int
+    let chunkCount: Int
+    let ftsCount: Int
 }
 
 private struct DatabaseMigration {
@@ -725,6 +1328,16 @@ private let migrations: [DatabaseMigration] = [
     ]),
     DatabaseMigration(version: 10, statements: [
         "ALTER TABLE messages ADD COLUMN grounding_source_ids BLOB NOT NULL DEFAULT X'5B5D'"
+    ]),
+    DatabaseMigration(version: 11, statements: [
+        "CREATE TABLE IF NOT EXISTS source_index_state (source_id TEXT PRIMARY KEY NOT NULL REFERENCES sources(id) ON DELETE CASCADE, document_count INTEGER NOT NULL, chunk_count INTEGER NOT NULL, content_revision TEXT NOT NULL, initial_sync_completed INTEGER NOT NULL, last_successful_sync REAL, last_verified_at REAL, last_error TEXT)",
+        "CREATE TABLE IF NOT EXISTS app_metadata (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)"
+    ]),
+    DatabaseMigration(version: 12, statements: [
+        "CREATE INDEX IF NOT EXISTS chunks_fts_content_chunk_id_index ON chunks_fts_content(c0)"
+    ]),
+    DatabaseMigration(version: 13, statements: [
+        "CREATE INDEX IF NOT EXISTS chunks_document_index ON chunks(document_id)"
     ])
 ]
 
@@ -780,6 +1393,27 @@ private final class SQLiteConnection: @unchecked Sendable {
         }
     }
 
+    func withPreparedStatement<Result>(
+        _ sql: String,
+        _ body: (_ execute: ([SQLiteValue]) throws -> Void) throws -> Result
+    ) throws -> Result {
+        let statement = try prepare(sql)
+        defer { sqlite3_finalize(statement) }
+        let execute: ([SQLiteValue]) throws -> Void = { [self] values in
+            guard sqlite3_reset(statement) == SQLITE_OK,
+                  sqlite3_clear_bindings(statement) == SQLITE_OK else {
+                throw error()
+            }
+            try bind(values, to: statement)
+            while true {
+                let state = sqlite3_step(statement)
+                if state == SQLITE_DONE { return }
+                guard state == SQLITE_ROW else { throw error() }
+            }
+        }
+        return try body(execute)
+    }
+
     func row(_ sql: String, _ values: [SQLiteValue] = []) throws -> SQLiteRow? {
         try rows(sql, values).first
     }
@@ -810,8 +1444,8 @@ private final class SQLiteConnection: @unchecked Sendable {
         }
     }
 
-    func integer(_ sql: String) throws -> Int {
-        guard let row = try row(sql), let value = row.values.values.first else { return 0 }
+    func integer(_ sql: String, _ values: [SQLiteValue] = []) throws -> Int {
+        guard let row = try row(sql, values), let value = row.values.values.first else { return 0 }
         switch value { case .integer(let number): return number; case .double(let number): return Int(number); default: return 0 }
     }
 
@@ -880,6 +1514,45 @@ private struct SQLiteRow {
         case .integer(let seconds): return Date(timeIntervalSince1970: Double(seconds))
         default: return nil
         }
+    }
+
+    func stringDictionary(_ name: String) -> [String: String] {
+        guard let data = try? data(name) else { return [:] }
+        return (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+    }
+}
+
+private extension ConnectorIndexHealth {
+    var bindings: [SQLiteValue] {
+        [
+            .text(sourceID.uuidString),
+            .integer(documentCount),
+            .integer(chunkCount),
+            .text(contentRevision),
+            .integer(initialSyncCompleted ? 1 : 0),
+            lastSuccessfulSync.map { .double($0.timeIntervalSince1970) } ?? .null,
+            lastVerifiedAt.map { .double($0.timeIntervalSince1970) } ?? .null,
+            lastError.map(SQLiteValue.text) ?? .null,
+        ]
+    }
+
+    init(row: SQLiteRow) throws {
+        let lastError: String?
+        if case .text(let value)? = row.values["last_error"] {
+            lastError = value
+        } else {
+            lastError = nil
+        }
+        self.init(
+            sourceID: try row.uuid("source_id"),
+            documentCount: try row.integer("document_count"),
+            chunkCount: try row.integer("chunk_count"),
+            contentRevision: try row.text("content_revision"),
+            initialSyncCompleted: try row.integer("initial_sync_completed") != 0,
+            lastSuccessfulSync: row.optionalDate("last_successful_sync"),
+            lastVerifiedAt: row.optionalDate("last_verified_at"),
+            lastError: lastError
+        )
     }
 }
 

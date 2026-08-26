@@ -57,6 +57,71 @@ final class HybridEvidenceRetrieverTests: XCTestCase {
         XCTAssertEqual(Set(result.evidence.map(\.sourceTitle)).count, result.evidence.count)
     }
 
+    func testSourceScopeConstrainsLexicalSemanticAndGraphCandidates() async throws {
+        let database = try MacBrainDatabase(url: try temporaryDatabaseURL())
+        let allowedSource = StoredSource(kind: SourceConnectorKind.appleMail.rawValue, displayName: "Allowed Mail")
+        let blockedSource = StoredSource(kind: SourceConnectorKind.appleNotes.rawValue, displayName: "Blocked Notes")
+        let allowedChunk = try await insert(
+            database,
+            source: allowedSource,
+            title: "Allowed ORBIT record",
+            text: "ORBIT MAIL-SCOPE-ALLOWED-731",
+            path: "/tmp/allowed-orbit.txt",
+            vector: [0, 1]
+        )
+        let blockedChunk = try await insert(
+            database,
+            source: blockedSource,
+            title: "Blocked ORBIT record",
+            text: "ORBIT NOTES-SCOPE-BLOCKED-842",
+            path: "/tmp/blocked-orbit.txt",
+            vector: [1, 0]
+        )
+        let sharedEntity = GraphEntity(
+            sourceID: allowedSource.id,
+            type: .topic,
+            name: "ORBIT",
+            confidence: 1
+        )
+        try await database.save(graph: GraphMutation(
+            entities: [sharedEntity],
+            mentions: [
+                GraphMention(
+                    entityID: sharedEntity.id,
+                    provenanceChunkID: allowedChunk.id,
+                    startOffset: 0,
+                    endOffset: 5,
+                    confidence: 1
+                ),
+                GraphMention(
+                    entityID: sharedEntity.id,
+                    provenanceChunkID: blockedChunk.id,
+                    startOffset: 0,
+                    endOffset: 5,
+                    confidence: 1
+                ),
+            ]
+        ))
+        let retriever = HybridEvidenceRetriever(
+            database: database,
+            provider: FixedEmbeddingProvider(vector: [1, 0]),
+            embeddingModel: "test-embed"
+        )
+
+        let result = try await retriever.search("ORBIT", sourceIDs: [allowedSource.id])
+        let graph = try await database.graphRelatedChunks(
+            to: [allowedChunk.id],
+            limit: 10,
+            sourceIDs: [allowedSource.id]
+        )
+
+        XCTAssertFalse(result.evidence.isEmpty)
+        XCTAssertTrue(result.evidence.allSatisfy { $0.sourceType == allowedSource.kind })
+        XCTAssertFalse(result.evidence.contains { $0.excerpt.contains("NOTES-SCOPE-BLOCKED-842") })
+        XCTAssertTrue(graph.allSatisfy { $0.sourceID == allowedSource.id })
+        XCTAssertFalse(graph.contains { $0.id == blockedChunk.id })
+    }
+
     func testCitationValidatorOnlyRendersKnownCitationIDs() {
         let evidence = [
             RetrievalEvidence(citationID: "S1", chunkID: UUID(), sourceTitle: "Plan", sourceType: "folder", sourcePath: "/tmp/plan.md", sourceDate: nil, excerpt: "Supported fact", startOffset: 0, endOffset: 14, pageNumber: nil, score: 0.9)
@@ -91,7 +156,7 @@ final class HybridEvidenceRetrieverTests: XCTestCase {
         let cards = ChatCitationCard.parse(from: rendered)
 
         XCTAssertEqual(cards.map(\.citationID), ["S1"])
-        XCTAssertEqual(cards.first?.url.path, "/tmp/Project Notes/launch plan.md")
+        XCTAssertEqual(cards.first?.url?.path, "/tmp/Project Notes/launch plan.md")
     }
 
     private func insert(_ database: MacBrainDatabase, source: StoredSource, title: String, text: String, path: String, vector: [Float]) async throws -> StoredChunk {

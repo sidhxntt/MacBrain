@@ -5,14 +5,25 @@ struct LiveMacQueryRouter {
         let normalized = prompt.lowercased()
         var capabilities = Set<LiveMacCapability>()
 
+        if normalized.contains("who am i") || normalized.contains("computer name") || normalized.contains("mac model") {
+            capabilities.insert(.identity)
+        }
+        if normalized.contains("specification") || normalized.contains("about this mac") {
+            capabilities.insert(.specifications)
+        }
         if normalized.contains("ram") || normalized.contains("memory") || normalized.contains("swap") {
             capabilities.insert(.memory)
         }
+        if normalized.contains("swap") { capabilities.insert(.swap) }
         if normalized.contains("cpu") || normalized.contains("processor") || normalized.contains("load average") {
             capabilities.insert(.processor)
         }
         if normalized.contains("disk") || normalized.contains("storage") || normalized.contains("drive") || normalized.contains("space available") {
             capabilities.insert(.storage)
+        }
+        if normalized.contains("volume") { capabilities.insert(.volumes) }
+        if normalized.contains("macos") || normalized.contains("operating system") || normalized.contains("os version") {
+            capabilities.insert(.operatingSystem)
         }
         if normalized.contains("battery") || normalized.contains("charging") || normalized.contains("power") {
             capabilities.insert(.power)
@@ -33,6 +44,9 @@ struct LiveMacQueryRouter {
         if normalized.contains("uptime") || normalized.contains("booted") || normalized.contains("running since") {
             capabilities.insert(.uptime)
         }
+        if normalized.contains("display") || normalized.contains("monitor") || normalized.contains("screen resolution") {
+            capabilities.insert(.displays)
+        }
         if normalized.contains("mac status") || normalized.contains("system overview") || normalized.contains("system health") || normalized.contains("current mac") {
             capabilities.formUnion(LiveMacCapability.allCases)
         }
@@ -41,6 +55,14 @@ struct LiveMacQueryRouter {
 
     func response(to prompt: String, snapshot: LiveMacSnapshot, profile: SystemProfile) -> String? {
         let capabilities = capabilities(for: prompt)
+        return response(for: capabilities, snapshot: snapshot, profile: profile)
+    }
+
+    func response(
+        for capabilities: Set<LiveMacCapability>,
+        snapshot: LiveMacSnapshot,
+        profile: SystemProfile
+    ) -> String? {
         guard !capabilities.isEmpty else { return nil }
 
         if capabilities.count == 1, let capability = capabilities.first {
@@ -52,8 +74,15 @@ struct LiveMacQueryRouter {
 
     private func response(for capability: LiveMacCapability, snapshot: LiveMacSnapshot, profile: SystemProfile) -> String {
         switch capability {
+        case .identity, .specifications:
+            return profile.markdownSummary
         case .memory:
             return snapshot.memory.markdownBreakdown(totalMemoryBytes: profile.memoryBytes)
+        case .swap:
+            guard let swap = snapshot.swap else {
+                return "## Swap now\n\n- Swap counters were not reported by macOS."
+            }
+            return "## Swap now\n\n- Used: \(byteCount(Int64(clamping: swap.usedBytes)))\n- Total: \(byteCount(Int64(clamping: swap.totalBytes)))"
         case .processor:
             return """
             ## CPU now
@@ -72,6 +101,15 @@ struct LiveMacQueryRouter {
             - Used: \(byteCount(used))
             - Available: \(byteCount(snapshot.storage.availableBytes))
             """
+        case .volumes:
+            guard !snapshot.storage.volumes.isEmpty else {
+                return "## Volumes now\n\n- No mounted volume capacities were reported."
+            }
+            return "## Volumes now\n\n" + snapshot.storage.volumes.prefix(12).map { volume in
+                "- \(volume.name): \(byteCount(volume.availableBytes)) available of \(byteCount(volume.totalBytes))"
+            }.joined(separator: "\n")
+        case .operatingSystem:
+            return "## Operating system\n\n- \(profile.operatingSystem)"
         case .power:
             guard let power = snapshot.power else {
                 return "## Power now\n\nNo battery is currently reported by macOS."
@@ -103,6 +141,13 @@ struct LiveMacQueryRouter {
             """
         case .uptime:
             return "## Uptime now\n\n- Uptime: \(uptime(snapshot.uptimeSeconds))"
+        case .displays:
+            guard !snapshot.displays.isEmpty else {
+                return "## Displays now\n\n- No display details were reported."
+            }
+            return "## Displays now\n\n" + snapshot.displays.prefix(8).map { display in
+                "- \(display.name): \(display.pixelWidth) × \(display.pixelHeight) pixels"
+            }.joined(separator: "\n")
         }
     }
 

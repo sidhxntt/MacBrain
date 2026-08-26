@@ -53,4 +53,26 @@ final class DocumentChunkerTests: XCTestCase {
 
         XCTAssertTrue(chunks.allSatisfy { $0.pageNumber == 7 })
     }
+
+    func testLargeDocumentChunkingRemainsLinear() {
+        let lineCount = 25_000
+        let text = Array(repeating: "Connector evidence stays local.\n", count: lineCount)
+            .joined()
+        let document = StoredDocument(
+            sourceID: UUID(),
+            externalID: "work/large.log",
+            title: "Large log",
+            text: text,
+            sourceLabel: "Work"
+        )
+        let clock = ContinuousClock()
+        let startedAt = clock.now
+
+        let chunks = DocumentChunker().chunks(for: document)
+
+        let elapsed = startedAt.duration(to: clock.now)
+        XCTAssertGreaterThan(chunks.count, 500)
+        XCTAssertEqual(chunks.last?.lineEnd, lineCount)
+        XCTAssertLessThan(elapsed, .seconds(2))
+    }
 }

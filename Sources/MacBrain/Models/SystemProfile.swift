@@ -12,6 +12,11 @@ struct SystemProfile: Sendable, Equatable {
     let localeIdentifier: String
     let timeZoneIdentifier: String
     let memoryUsage: SystemMemoryUsage?
+    let architecture: String
+    let physicalCPUCount: Int?
+    let logicalCPUCount: Int?
+    let performanceCoreCount: Int?
+    let efficiencyCoreCount: Int?
 
     init(
         userDisplayName: String,
@@ -24,7 +29,12 @@ struct SystemProfile: Sendable, Equatable {
         availableDiskBytes: Int64,
         localeIdentifier: String,
         timeZoneIdentifier: String,
-        memoryUsage: SystemMemoryUsage? = nil
+        memoryUsage: SystemMemoryUsage? = nil,
+        architecture: String = "Unknown",
+        physicalCPUCount: Int? = nil,
+        logicalCPUCount: Int? = nil,
+        performanceCoreCount: Int? = nil,
+        efficiencyCoreCount: Int? = nil
     ) {
         self.userDisplayName = userDisplayName
         self.computerName = computerName
@@ -37,11 +47,16 @@ struct SystemProfile: Sendable, Equatable {
         self.localeIdentifier = localeIdentifier
         self.timeZoneIdentifier = timeZoneIdentifier
         self.memoryUsage = memoryUsage
+        self.architecture = architecture
+        self.physicalCPUCount = physicalCPUCount
+        self.logicalCPUCount = logicalCPUCount
+        self.performanceCoreCount = performanceCoreCount
+        self.efficiencyCoreCount = efficiencyCoreCount
     }
 
     var promptContext: String {
         """
-        Local Mac context, supplied by the user’s device: user display name: \(userDisplayName); computer: \(computerName) (\(hardwareModel)); processor: \(processor); memory: \(byteCount(memoryBytes)); operating system: \(operatingSystem); storage: \(byteCount(totalDiskBytes)) total, \(byteCount(availableDiskBytes)) available; locale: \(localeIdentifier); time zone: \(timeZoneIdentifier).
+        Local Mac context, supplied by the user’s device: user display name: \(userDisplayName); computer: \(computerName) (\(hardwareModel)); processor: \(processor); architecture: \(architecture); memory: \(byteCount(memoryBytes)); operating system: \(operatingSystem); storage: \(byteCount(totalDiskBytes)) total, \(byteCount(availableDiskBytes)) available; locale: \(localeIdentifier); time zone: \(timeZoneIdentifier).
         \(memoryUsage?.promptContext ?? "")
         """
     }
@@ -58,6 +73,7 @@ struct SystemProfile: Sendable, Equatable {
         - **Computer:** \(computerName)
         - **Model:** \(hardwareModel)
         - **Processor:** \(processor)
+        - **Architecture:** \(architecture)
         - **Memory:** \(byteCount(memoryBytes))
         - **macOS:** \(operatingSystem)
         - **Storage:** \(byteCount(totalDiskBytes)) total · \(byteCount(availableDiskBytes)) available

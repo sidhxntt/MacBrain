@@ -9,20 +9,35 @@ struct LocalLiveMacContextProvider: LiveMacContextProviding {
         let appState: (active: String?, running: [String]) = capabilities.contains(.applications)
             ? await MainActor.run { Self.applicationState() }
             : (nil, [])
+        let displays = capabilities.contains(.displays)
+            ? await MainActor.run { Self.displayState() }
+            : []
+        let bootTime = Self.currentBootTime()
+        let volumes = capabilities.contains(.storage)
+                || capabilities.contains(.volumes)
+                || capabilities.contains(.specifications)
+            ? Self.mountedVolumes()
+            : []
 
         return LiveMacSnapshot(
             capturedAt: .now,
             memory: Self.currentMemoryUsage() ?? .empty,
             storage: .init(
                 totalBytes: (fileSystem[.systemSize] as? NSNumber)?.int64Value ?? 0,
-                availableBytes: (fileSystem[.systemFreeSize] as? NSNumber)?.int64Value ?? 0
+                availableBytes: (fileSystem[.systemFreeSize] as? NSNumber)?.int64Value ?? 0,
+                volumes: volumes
             ),
-            uptimeSeconds: Self.currentUptime(),
+            uptimeSeconds: bootTime.map { max(0, Date.now.timeIntervalSince($0)) } ?? 0,
             cpuLoadAverages: Self.currentCPULoadAverages(),
             power: capabilities.contains(.power) ? Self.currentPower() : nil,
             activeApplicationName: appState.active,
             runningApplicationNames: appState.running,
-            networkInterfaces: capabilities.contains(.network) ? Self.activeNetworkInterfaces() : []
+            networkInterfaces: capabilities.contains(.network) ? Self.activeNetworkInterfaces() : [],
+            swap: capabilities.contains(.memory) || capabilities.contains(.swap)
+                ? Self.currentSwapUsage()
+                : nil,
+            bootTime: bootTime,
+            displays: displays
         )
     }
 
@@ -53,12 +68,12 @@ struct LocalLiveMacContextProvider: LiveMacContextProviding {
         )
     }
 
-    private static func currentUptime() -> TimeInterval {
+    private static func currentBootTime() -> Date? {
         var bootTime = timeval()
         var mib: [Int32] = [CTL_KERN, KERN_BOOTTIME]
         var size = MemoryLayout<timeval>.size
-        guard sysctl(&mib, u_int(mib.count), &bootTime, &size, nil, 0) == 0 else { return 0 }
-        return max(0, Date().timeIntervalSince1970 - TimeInterval(bootTime.tv_sec))
+        guard sysctl(&mib, u_int(mib.count), &bootTime, &size, nil, 0) == 0 else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(bootTime.tv_sec))
     }
 
     private static func currentCPULoadAverages() -> [Double] {
@@ -83,8 +98,43 @@ struct LocalLiveMacContextProvider: LiveMacContextProviding {
         return .init(
             percentage: percentage,
             isCharging: description[kIOPSIsChargingKey] as? Bool,
-            source: description[kIOPSPowerSourceStateKey] as? String
+            source: description[kIOPSPowerSourceStateKey] as? String,
+            cycleCount: description["Cycle Count"] as? Int,
+            condition: description[kIOPSBatteryHealthConditionKey] as? String
+                ?? description[kIOPSBatteryHealthKey] as? String
         )
+    }
+
+    private static func currentSwapUsage() -> LiveMacSnapshot.Swap? {
+        var usage = xsw_usage()
+        var size = MemoryLayout<xsw_usage>.size
+        guard sysctlbyname("vm.swapusage", &usage, &size, nil, 0) == 0 else { return nil }
+        return .init(totalBytes: usage.xsu_total, usedBytes: usage.xsu_used)
+    }
+
+    private static func mountedVolumes() -> [LiveMacSnapshot.Storage.Volume] {
+        let keys: Set<URLResourceKey> = [
+            .volumeNameKey,
+            .volumeTotalCapacityKey,
+            .volumeAvailableCapacityForImportantUsageKey,
+        ]
+        let urls = FileManager.default.mountedVolumeURLs(
+            includingResourceValuesForKeys: Array(keys),
+            options: [.skipHiddenVolumes]
+        ) ?? []
+        return urls.compactMap { url in
+            guard let values = try? url.resourceValues(forKeys: keys),
+                  let name = values.volumeName,
+                  let total = values.volumeTotalCapacity else {
+                return nil
+            }
+            return LiveMacSnapshot.Storage.Volume(
+                name: name,
+                totalBytes: Int64(total),
+                availableBytes: values.volumeAvailableCapacityForImportantUsage ?? 0
+            )
+        }
+        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     @MainActor
@@ -94,6 +144,20 @@ struct LocalLiveMacContextProvider: LiveMacContextProviding {
             .compactMap(\.localizedName)
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         return (workspace.frontmostApplication?.localizedName, running)
+    }
+
+    @MainActor
+    private static func displayState() -> [LiveMacSnapshot.Display] {
+        NSScreen.screens.map { screen in
+            let scale = screen.backingScaleFactor
+            return LiveMacSnapshot.Display(
+                name: screen.localizedName,
+                pixelWidth: Int((screen.frame.width * scale).rounded()),
+                pixelHeight: Int((screen.frame.height * scale).rounded()),
+                scaleFactor: scale,
+                isMain: screen == NSScreen.main
+            )
+        }
     }
 
     private static func activeNetworkInterfaces() -> [String] {

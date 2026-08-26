@@ -18,7 +18,12 @@ struct LocalSystemProfileProvider: SystemProfileProviding {
             availableDiskBytes: (fileSystem[.systemFreeSize] as? NSNumber)?.int64Value ?? 0,
             localeIdentifier: Locale.current.identifier,
             timeZoneIdentifier: TimeZone.current.identifier,
-            memoryUsage: LocalLiveMacContextProvider.currentMemoryUsage()
+            memoryUsage: LocalLiveMacContextProvider.currentMemoryUsage(),
+            architecture: sysctlValue("hw.machine") ?? "Unknown",
+            physicalCPUCount: sysctlInteger("hw.physicalcpu"),
+            logicalCPUCount: sysctlInteger("hw.logicalcpu") ?? processInfo.processorCount,
+            performanceCoreCount: sysctlInteger("hw.perflevel0.physicalcpu"),
+            efficiencyCoreCount: sysctlInteger("hw.perflevel1.physicalcpu")
         )
     }
 
@@ -30,5 +35,12 @@ struct LocalSystemProfileProvider: SystemProfileProviding {
         guard sysctlbyname(name, &buffer, &length, nil, 0) == 0 else { return nil }
         let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
         return String(decoding: bytes, as: UTF8.self)
+    }
+
+    private func sysctlInteger(_ name: String) -> Int? {
+        var value: Int32 = 0
+        var length = MemoryLayout<Int32>.size
+        guard sysctlbyname(name, &value, &length, nil, 0) == 0 else { return nil }
+        return Int(value)
     }
 }

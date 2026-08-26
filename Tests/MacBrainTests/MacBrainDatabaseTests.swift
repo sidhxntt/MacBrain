@@ -125,7 +125,7 @@ final class MacBrainDatabaseTests: XCTestCase {
         XCTAssertEqual(matches.first?.text, document.text)
     }
 
-    func testBatchedSourceMergeIndexesOnlyItsChangedBatch() async throws {
+    func testBatchedSourceStagesUntilVerifiedGenerationCommit() async throws {
         let database = try MacBrainDatabase(url: try temporaryDatabaseURL())
         let repository = LocalSourceRepository(fileURL: try temporaryDatabaseURL(), database: database)
         let record = ConnectorRecord(kind: .photos, displayName: "Photos metadata", configuration: .init())
@@ -148,6 +148,21 @@ final class MacBrainDatabaseTests: XCTestCase {
         _ = try await repository.mergeDocuments(for: record.id, with: [original], updateSearchIndex: false)
         _ = try await repository.mergeDocuments(for: record.id, with: [changed], updateSearchIndex: false)
 
+        let stagedMountainMatches = try await database.searchDocuments(matching: "mountain")
+        let stagedOceanMatches = try await database.searchDocuments(matching: "ocean")
+        XCTAssertTrue(stagedMountainMatches.isEmpty)
+        XCTAssertTrue(stagedOceanMatches.isEmpty)
+
+        var completedRecord = record
+        completedRecord.status = .ready
+        completedRecord.configuration.initialSyncCompleted = true
+        completedRecord.lastSuccessfulSync = .now
+        let stagedDocuments = await repository.documents(for: record.id)
+        _ = try await repository.commitSourceGeneration(
+            record: completedRecord,
+            documents: stagedDocuments
+        )
+
         let mountainMatches = try await database.searchDocuments(matching: "mountain")
         let oceanMatches = try await database.searchDocuments(matching: "ocean")
         XCTAssertEqual(mountainMatches.count, 1)
@@ -157,7 +172,13 @@ final class MacBrainDatabaseTests: XCTestCase {
     func testFilenameAndRelativePathAreSearchableLocalEvidence() async throws {
         let database = try MacBrainDatabase(url: try temporaryDatabaseURL())
         let repository = LocalSourceRepository(fileURL: try temporaryDatabaseURL(), database: database)
-        let record = ConnectorRecord(kind: .folder, displayName: "Test folder", configuration: .init())
+        let record = ConnectorRecord(
+            kind: .folder,
+            displayName: "Test folder",
+            configuration: .init(initialSyncCompleted: true),
+            status: .ready,
+            lastSuccessfulSync: .now
+        )
         let document = ConnectorDocument(
             connectorID: record.id,
             externalID: "/tmp/test/nested/notes.md",
@@ -170,8 +191,10 @@ final class MacBrainDatabaseTests: XCTestCase {
             ]
         )
 
-        try await repository.save(record)
-        _ = try await repository.replaceDocuments(for: record.id, with: [document])
+        _ = try await repository.commitSourceGeneration(
+            record: record,
+            documents: [document]
+        )
 
         let matches = await repository.search("notes.md")
         let response = try await LocalKnowledgeResponder(repository: repository)
@@ -219,6 +242,51 @@ final class MacBrainDatabaseTests: XCTestCase {
         )
         let cachedChunkID = try await database.searchChunks(matching: "unchanged evidence").first?.id
         XCTAssertEqual(cachedChunkID, stableChunkID)
+    }
+
+    func testSourceGenerationPersistsMetadataOnlyDocumentChanges() async throws {
+        let database = try MacBrainDatabase(url: try temporaryDatabaseURL())
+        let repository = LocalSourceRepository(
+            fileURL: try temporaryDatabaseURL(),
+            database: database
+        )
+        var record = ConnectorRecord(
+            kind: .folder,
+            displayName: "Work",
+            configuration: .init(initialSyncCompleted: true),
+            status: .ready,
+            lastSuccessfulSync: Date(timeIntervalSince1970: 1_000)
+        )
+        let modifiedAt = Date(timeIntervalSince1970: 900)
+        let original = ConnectorDocument(
+            connectorID: record.id,
+            externalID: "decision.md",
+            title: "Decision",
+            text: "Keep the connector index local.",
+            sourceLabel: "Work",
+            modifiedAt: modifiedAt,
+            metadata: ["relativePath": "old/decision.md"]
+        )
+        _ = try await repository.commitSourceGeneration(record: record, documents: [original])
+
+        record.lastSuccessfulSync = Date(timeIntervalSince1970: 2_000)
+        let metadataOnlyChange = ConnectorDocument(
+            id: original.id,
+            connectorID: record.id,
+            externalID: original.externalID,
+            title: original.title,
+            text: original.text,
+            sourceLabel: original.sourceLabel,
+            modifiedAt: modifiedAt,
+            metadata: ["relativePath": "new/decision.md"]
+        )
+        _ = try await repository.commitSourceGeneration(
+            record: record,
+            documents: [metadataOnlyChange]
+        )
+
+        let stored = try await database.documents(sourceID: record.id)
+        XCTAssertEqual(stored.first?.metadata["relativePath"], "new/decision.md")
     }
 
     func testSourceSyncIndexesOnlyNewChangedAndRemovedFiles() async throws {

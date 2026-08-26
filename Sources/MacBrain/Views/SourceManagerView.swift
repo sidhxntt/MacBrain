@@ -176,6 +176,7 @@ struct SourceManagerView: View {
                         ForEach(row) { record in
                             SourceRecordRow(
                                 record: record,
+                                health: store.indexHealthBySourceID[record.id],
                                 isWorking: store.isSyncing(record),
                                 sync: { store.sync(record) },
                                 pause: { store.pause(record) },
@@ -394,6 +395,7 @@ private struct SyncActivityGroupCard: View {
 
 private struct SourceRecordRow: View {
     let record: ConnectorRecord
+    let health: ConnectorIndexHealth?
     let isWorking: Bool
     let sync: () -> Void
     let pause: () -> Void
@@ -441,26 +443,60 @@ private struct SourceRecordRow: View {
     }
 
     private var statusDescription: String {
-        let count = "\(record.documentCount) \(record.documentCount == 1 ? "item" : "items")"
-        switch record.status {
-        case .ready:
-            if let sync = record.lastSuccessfulSync {
-                return "Ready · \(count) · synced \(sync.formatted(.relative(presentation: .named)))"
-            }
-            return "Ready · \(count)"
-        case .syncing: return record.syncProgress ?? "Preparing local sync…"
-        case .paused: return "Paused · \(count) retained locally"
-        case .needsAuthorization: return "Permission needed · \(count) retained locally"
-        case .failed: return "Sync failed · \(count) retained locally"
+        switch presentationState {
+        case .connecting:
+            return "Building first searchable index…"
+        case .syncing(let progress):
+            return progress ?? "Building searchable index…"
+        case .refreshing(let documentCount, let lastSuccessfulSync):
+            return status(
+                prefix: "Refreshing · \(itemCount(documentCount)) remain searchable",
+                lastSuccessfulSync: lastSuccessfulSync
+            )
+        case .ready(let documentCount, let lastSuccessfulSync):
+            return status(
+                prefix: "Ready · \(itemCount(documentCount))",
+                lastSuccessfulSync: lastSuccessfulSync
+            )
+        case .empty(let lastSuccessfulSync):
+            return status(
+                prefix: "Ready · no indexed items found",
+                lastSuccessfulSync: lastSuccessfulSync
+            )
+        case .paused(let documentCount, let hasSearchableIndex):
+            return hasSearchableIndex
+                ? "Paused · \(itemCount(documentCount)) remain searchable"
+                : "Paused · no verified searchable index"
+        case .needsAuthorization(let documentCount, let hasSearchableIndex):
+            return hasSearchableIndex
+                ? "Permission needed · \(itemCount(documentCount)) unavailable until reauthorized"
+                : "Permission needed · not searchable yet"
+        case .failed(let documentCount, let hasSearchableIndex):
+            return hasSearchableIndex
+                ? "Sync failed · \(itemCount(documentCount)) remain searchable"
+                : "Sync failed · no verified searchable index"
         }
     }
 
     private var statusColor: Color {
-        switch record.status {
-        case .ready: .secondary
-        case .syncing: .accentColor
+        switch presentationState {
+        case .ready, .empty: .secondary
+        case .connecting, .syncing, .refreshing: .accentColor
         case .paused: .orange
         case .needsAuthorization, .failed: .red
         }
+    }
+
+    private var presentationState: ConnectorPresentationState {
+        ConnectorPresentationState(record: record, health: health)
+    }
+
+    private func itemCount(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "item" : "items")"
+    }
+
+    private func status(prefix: String, lastSuccessfulSync: Date?) -> String {
+        guard let lastSuccessfulSync else { return prefix }
+        return "\(prefix) · synced \(lastSuccessfulSync.formatted(.relative(presentation: .named)))"
     }
 }

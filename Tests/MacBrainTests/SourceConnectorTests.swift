@@ -854,7 +854,7 @@ final class SourceConnectorTests: XCTestCase {
 
             try await coordinator.resume(id: record.id)
             let resumedRecord = await repository.record(id: record.id)
-            XCTAssertEqual(resumedRecord?.status, .ready)
+            XCTAssertEqual(resumedRecord?.status, .syncing)
         }
     }
 
@@ -921,11 +921,17 @@ final class SourceConnectorTests: XCTestCase {
 
     func testLocalKnowledgeResponderAnswersFromIndexedContent() async throws {
         let repository = LocalSourceRepository(fileURL: try temporaryStoreURL())
-        let connectorID = UUID()
-        _ = try await repository.replaceDocuments(
-            for: connectorID,
-            with: [ConnectorDocument(
-                connectorID: connectorID,
+        let record = ConnectorRecord(
+            kind: .folder,
+            displayName: "Architecture",
+            configuration: .init(initialSyncCompleted: true),
+            status: .ready,
+            lastSuccessfulSync: .now
+        )
+        _ = try await repository.commitSourceGeneration(
+            record: record,
+            documents: [ConnectorDocument(
+                connectorID: record.id,
                 externalID: "architecture",
                 title: "Architecture decision",
                 text: "Use only local retrieval for work context.",
@@ -936,7 +942,8 @@ final class SourceConnectorTests: XCTestCase {
         let response = try await LocalKnowledgeResponder(repository: repository).respond(to: "What did we decide about local retrieval?")
 
         XCTAssertTrue(response.contains("Architecture decision"))
-        XCTAssertTrue(response.contains("Transcript: architecture"))
+        XCTAssertTrue(response.contains("Use only local retrieval for work context."))
+        XCTAssertTrue(response.contains("[folder] Architecture decision"))
     }
 
     func testEveryConnectorKindIsAvailableForExplicitUserSelection() {

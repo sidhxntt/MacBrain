@@ -9,6 +9,7 @@ final class AppCoordinator {
     let chatStore: ChatStore
     let memoryStore: MemoryStore
     let inferenceStore: InferenceStore
+    let onboardingStore: OnboardingStore
     let contextSafeguards = ContextSafeguards()
     let workspaceStore = MainWorkspaceStore()
     private(set) var sidebarController: SidebarPanelController?
@@ -16,8 +17,10 @@ final class AppCoordinator {
 
     init(
         sourceLibrary: SourceLibraryStore? = nil,
-        inferenceStore: InferenceStore? = nil
+        inferenceStore: InferenceStore? = nil,
+        onboardingStore: OnboardingStore? = nil
     ) {
+        self.onboardingStore = onboardingStore ?? OnboardingStore()
         let sessionDatabase = try? MacBrainDatabase()
         self.sourceLibrary = sourceLibrary ?? SourceLibraryStore(
             repository: LocalSourceRepository(database: sessionDatabase),
@@ -33,7 +36,11 @@ final class AppCoordinator {
             repository: self.sourceLibrary.repository,
             selectedModel: { configuredInferenceStore.selectedChatModel },
             selectedEmbeddingModel: { configuredInferenceStore.selectedEmbeddingModel },
-            fallback: LocalKnowledgeResponder(repository: self.sourceLibrary.repository)
+            fallback: LocalKnowledgeResponder(repository: self.sourceLibrary.repository),
+            queryPlanner: LocalQueryPlanner(),
+            connectorQueryService: ConnectorQueryService(
+                repository: self.sourceLibrary.repository
+            )
         )
         self.chatStore = ChatStore(
             responder: ResponseCachingResponder(
@@ -70,16 +77,21 @@ final class AppCoordinator {
         activationBarController = activationBar
         Task { @MainActor [sourceLibrary] in
             await Task.yield()
+            do {
+                try await sourceLibrary.repository.bootstrap()
+            } catch {
+                sourceLibrary.alertMessage = "MacBrain could not prepare connected sources: \(error.localizedDescription)"
+            }
             await sourceLibrary.reload()
             await chatStore.restorePersistedSessions()
             await memoryStore.reload()
             await inferenceStore.refresh()
-            sourceLibrary.startAutomaticRefresh()
+            await sourceLibrary.startAutomaticRefreshAndWait()
         }
     }
 
-    func stop() {
-        sourceLibrary.stopAutomaticRefresh()
+    func stop() async {
+        await sourceLibrary.stopAutomaticRefreshAndWait()
         activationBarController?.hide()
         sidebarController?.hide(notify: false)
         logger.info("Application stopped")

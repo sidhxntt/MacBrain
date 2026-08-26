@@ -16,6 +16,7 @@ struct LocalFileReadTool: Sendable {
         guard let document = matches.first(where: { Self.matches($0, requestedPath: requestedPath) }),
               let record = await repository.record(id: document.connectorID),
               record.kind == .folder || record.kind == .gitRepository,
+              record.status != .needsAuthorization,
               let content = try? readCurrentContent(of: document, in: record)
         else {
             return nil
@@ -26,19 +27,24 @@ struct LocalFileReadTool: Sendable {
         let truncationNotice = content.count > visibleContent.count
             ? "\n\n_Only the first \(Self.maximumResponseCharacters.formatted()) characters are shown._"
             : ""
-        let sourcePath = document.metadata["path"] ?? document.externalID
+        let location = CitationSourceLocation.resolve(
+            sourceType: record.kind.rawValue,
+            externalID: document.externalID,
+            metadata: document.metadata
+        )
         let source = RetrievalEvidence(
             citationID: "S1",
             chunkID: UUID(),
             sourceTitle: document.title,
             sourceType: record.kind.rawValue,
-            sourcePath: sourcePath,
+            sourcePath: location.reference,
             sourceDate: document.modifiedAt ?? document.createdAt,
             excerpt: visibleContent,
             startOffset: 0,
             endOffset: visibleContent.utf16.count,
             pageNumber: nil,
-            score: 1
+            score: 1,
+            sourceURL: location.url
         )
         let sources = CitationValidator.renderedSources(for: [source])
         return "## \(displayPath)\n\n\(visibleContent)\(truncationNotice)\n\n\(sources)"

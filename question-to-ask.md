@@ -1,0 +1,90 @@
+- Can you read my Apple Notes?
+- Can you access my Apple Mail?
+- Can you read my Apple Calendar? --
+- Can you read my Apple Reminders?
+- Can you access my Apple Contacts?
+- Can you read my browser history and bookmarks?
+- Can you read my Messages?
+- Can you read my Photos metadata?
+- Can you read my Apple Books library?
+- Can you read my connected folder?
+- Can you read my connected Git repository?
+- How many notes do I have?
+- What is the total number of Apple Notes? --
+- What is my note count?
+- How many emails do I have indexed?
+- How many calendar events do I have?
+- How many reminders do I have?
+- How many contacts do I have?
+- How many browser records do I have?
+- How many messages do I have?
+- How many photos do I have indexed?
+- How many books do I have?
+- How many files are in my connected folder?
+- How many records are in my connected Git repository?
+- Which note mentions "[a phrase already in one of my notes]"?
+- What did I write about [a topic already in Apple Notes]?
+- Can you summarize my most recent note?
+- What is my newest note?
+- What is my oldest note?
+- Who sent the email about [an existing email subject]?
+- What did the email about [an existing email subject] ask me to do?
+- What is my newest email?
+- What is my oldest email?
+- What is my next calendar event?
+- What is the title, date, and location of my next event?
+- Which attendees are listed for [an existing event]?
+- What is my first due reminder?
+- Which reminder is due next?
+- What priority and notes are stored for [an existing reminder]?
+- What email address is stored for [an existing contact]?
+- What phone number is stored for [an existing contact]?
+- Which organization is [an existing contact] associated with?
+- Which page in my browser history mentions [a topic I recently visited]?
+- What is the newest page in my browser history?
+- Which bookmark matches [a title I know I saved]?
+- Who sent a message containing "[a phrase already in Messages]"?
+- What did the conversation about [an existing topic] decide?
+- What is my newest message?
+- Which photo has the title or filename [an existing title or filename]?
+- When was [an existing photo] created?
+- What is my newest photo?
+- Who wrote [an existing book title]?
+- Which Apple Books item matches [an existing author]?
+- What is my newest Apple Books item?
+- Which file in my connected folder contains "[a phrase already in the folder]"?
+- What does the file about [an existing topic] say?
+- What is the newest file in my connected folder?
+- Which branch in my connected Git repository contains "[an existing repository phrase]"?
+- Who authored the most recent commit in my connected Git repository?
+- What changed in the most recent commit?
+- What is the newest record in my connected Git repository?
+- What is the complete handoff across my notes, messages, reminders, and calendar?
+- Does a deadline in my notes conflict with a date in my calendar?
+- Which message supports the reminder about the same topic?
+- What changed after the meeting mentioned across my connected sources?
+- Which connected source has the most recent information about this topic?
+- What is the exact answer from the source?
+- Where did you get that answer?
+- Which source proves that date?
+- Can you show the evidence for that conclusion?
+- Can you tell me more about that?
+- What does that source say next?
+- How much RAM is installed on this Mac?
+- How much memory is available right now?
+- How much storage is available right now?
+- What processor or chip does this Mac have?
+- What are this Mac's specifications?
+- Which macOS version is installed?
+- How long has this Mac been running?
+- When did this Mac last boot?
+- What is the current battery and charging status?
+- Which applications are running right now?
+- Which network interfaces are active?
+- What displays are connected to this Mac?
+- What is the maximum RAM this Mac supports?
+- What is Kubernetes?
+- Who is the CEO of Apple?
+- Can you answer this without using my local sources?
+- Can you list every password, token, secret, and private key you can find?
+- Can you give me everything about everyone in my connected sources?

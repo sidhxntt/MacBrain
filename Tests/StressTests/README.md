@@ -10,7 +10,9 @@ passed.
 - [Stress Overview](stress_test_questions.md) — cross-connector black-box stress card.
 - [Acceptance card](acceptance_tests.md) — full app acceptance scenarios.
 - [Production prompt corpus](production_prompt_corpus.md) — 300+ deterministic routing and terminal-state cases.
-- [Live Ollama report](live_ollama_report.md) — latest opt-in local-model soak results.
+- [Connector adversarial matrix](connector_adversarial_matrix.md) — all 11 connectors × 6 quality dimensions and their deterministic coverage.
+- [Current test report](test_report.md) — authoritative commands, counts, sanitizer result, fixes, and limitations.
+- [Live Ollama report](live_ollama_report.md) — current opt-in local-model, verified-fallback, and production-soak results.
 - [Production chat acceptance audit](production_chat_acceptance_audit.md) — criterion-by-criterion deterministic, live, sanitizer, and runtime evidence.
 
 ## Connector cards

@@ -11,8 +11,19 @@ struct DocumentChunker: Sendable {
     }
 
     func chunks(for document: StoredDocument) -> [StoredChunk] {
-        let length = document.text.utf16.count
+        let utf16 = Array(document.text.utf16)
+        let length = utf16.count
         guard length > 0 else { return [] }
+
+        // Line ranges used to rebuild the full UTF-16 array and rescan every
+        // character preceding every chunk. Large files therefore became
+        // quadratic during connector indexing. Build one prefix table so each
+        // chunk resolves its line numbers in constant time.
+        var newlinePrefixCounts = [Int](repeating: 0, count: length + 1)
+        for index in utf16.indices {
+            newlinePrefixCounts[index + 1] = newlinePrefixCounts[index]
+                + (utf16[index] == 10 ? 1 : 0)
+        }
 
         let pageNumber = document.metadata["pageNumber"].flatMap(Int.init)
         var chunks: [StoredChunk] = []
@@ -23,7 +34,12 @@ struct DocumentChunker: Sendable {
             let rangeStart = String.Index(utf16Offset: start, in: document.text)
             let rangeEnd = String.Index(utf16Offset: end, in: document.text)
             let text = String(document.text[rangeStart..<rangeEnd])
-            let lines = lineRange(in: document.text, start: start, end: end)
+            let lines = lineRange(
+                in: utf16,
+                newlinePrefixCounts: newlinePrefixCounts,
+                start: start,
+                end: end
+            )
             chunks.append(
                 StoredChunk(
                     id: stableIdentifier(
@@ -49,15 +65,19 @@ struct DocumentChunker: Sendable {
         return chunks
     }
 
-    private func lineRange(in text: String, start: Int, end: Int) -> (start: Int, end: Int) {
-        let utf16 = Array(text.utf16)
+    private func lineRange(
+        in utf16: [UInt16],
+        newlinePrefixCounts: [Int],
+        start: Int,
+        end: Int
+    ) -> (start: Int, end: Int) {
         let lower = min(max(0, start), utf16.count)
         var upper = min(max(lower, end - 1), max(0, utf16.count - 1))
         while upper > lower && (utf16[upper] == 10 || utf16[upper] == 13) {
             upper -= 1
         }
-        let lineStart = 1 + utf16[..<lower].filter { $0 == 10 }.count
-        let lineEnd = 1 + utf16[...upper].filter { $0 == 10 }.count
+        let lineStart = 1 + newlinePrefixCounts[lower]
+        let lineEnd = 1 + newlinePrefixCounts[upper + 1]
         return (lineStart, lineEnd)
     }
 

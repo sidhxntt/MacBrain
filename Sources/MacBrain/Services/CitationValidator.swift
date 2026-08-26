@@ -40,10 +40,39 @@ enum CitationValidator {
 
     private static func render(_ evidence: RetrievalEvidence) -> String {
         let location = evidence.pageNumber.map { " (page \($0))" } ?? ""
-        if let url = URL(string: evidence.sourcePath), url.scheme != nil {
-            return "- [\(evidence.citationID)](\(url.absoluteString)) \(evidence.sourceTitle)\(location)"
+        let sourceType = evidence.sourceType
+            .replacingOccurrences(of: "[", with: "")
+            .replacingOccurrences(of: "]", with: "")
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        let sourceTitle = evidence.sourceTitle
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        if let url = evidence.sourceURL.flatMap(safeDestination) ?? legacySafeURL(for: evidence) {
+            return "- [\(evidence.citationID)](\(url.absoluteString)) [\(sourceType)] \(sourceTitle)\(location)"
         }
-        let fileURL = URL(fileURLWithPath: evidence.sourcePath).absoluteString
-        return "- [\(evidence.citationID)](\(fileURL)) \(evidence.sourceTitle)\(location)"
+        return "- [\(evidence.citationID)] [\(sourceType)] \(sourceTitle)\(location)"
+    }
+
+    private static func legacySafeURL(for evidence: RetrievalEvidence) -> URL? {
+        if let url = URL(string: evidence.sourcePath),
+           let scheme = url.scheme?.lowercased(),
+           ["file", "http", "https"].contains(scheme) {
+            return safeDestination(url)
+        }
+        if [SourceConnectorKind.folder.rawValue, SourceConnectorKind.gitRepository.rawValue]
+            .contains(evidence.sourceType),
+           evidence.sourcePath.hasPrefix("/") {
+            return URL(fileURLWithPath: evidence.sourcePath)
+        }
+        return nil
+    }
+
+    private static func safeDestination(_ url: URL) -> URL? {
+        guard let scheme = url.scheme?.lowercased() else { return nil }
+        if url.isFileURL {
+            return (url.path as NSString).isAbsolutePath ? url : nil
+        }
+        return ["http", "https"].contains(scheme) && url.host != nil ? url : nil
     }
 }

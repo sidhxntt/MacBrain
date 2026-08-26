@@ -13,16 +13,29 @@ actor HybridEvidenceRetriever {
         self.configuration = configuration
     }
 
-    func search(_ query: String, limit: Int = 6) async throws -> EvidenceSearchResult {
+    func search(
+        _ query: String,
+        limit: Int = 6,
+        sourceIDs: Set<UUID>? = nil
+    ) async throws -> EvidenceSearchResult {
         let normalized = query.normalizedRetrievalQuery
-        guard !normalized.isEmpty else { return .empty }
+        guard !normalized.isEmpty, sourceIDs?.isEmpty != true else { return .empty }
         let candidateLimit = max(limit, configuration.candidateLimit)
-        let lexical = try await database.searchChunks(matching: normalized, limit: candidateLimit, matchAllTerms: false)
+        let lexical = try await database.searchChunks(
+            matching: normalized,
+            limit: candidateLimit,
+            matchAllTerms: false,
+            sourceIDs: sourceIDs
+        )
         let semantic: [StoredChunk]
         do {
             guard let provider else { throw LexicalOnlySearchError() }
             let embeddings = try await provider.embeddings(model: embeddingModel, input: [normalized])
-            semantic = try await database.nearestChunks(to: embeddings.first?.values ?? [], limit: candidateLimit)
+            semantic = try await database.nearestChunks(
+                to: embeddings.first?.values ?? [],
+                limit: candidateLimit,
+                sourceIDs: sourceIDs
+            )
         } catch {
             semantic = []
         }
@@ -30,7 +43,11 @@ actor HybridEvidenceRetriever {
         var candidates = [UUID: Candidate]()
         try await add(lexical, rankWeight: 0.60, to: &candidates)
         try await add(semantic, rankWeight: 0.40, to: &candidates)
-        let graph = try await database.graphRelatedChunks(to: Array(candidates.keys), limit: min(4, candidateLimit))
+        let graph = try await database.graphRelatedChunks(
+            to: Array(candidates.keys),
+            limit: min(4, candidateLimit),
+            sourceIDs: sourceIDs
+        )
         try await add(graph, rankWeight: 0.15, to: &candidates)
         return makeResult(from: candidates, limit: limit)
     }
@@ -38,11 +55,20 @@ actor HybridEvidenceRetriever {
     /// Exact token retrieval used as the activation gate for ambiguous local
     /// questions. This path intentionally performs no embedding request and no
     /// graph expansion.
-    func searchLexical(_ query: String, limit: Int = 6) async throws -> EvidenceSearchResult {
+    func searchLexical(
+        _ query: String,
+        limit: Int = 6,
+        sourceIDs: Set<UUID>? = nil
+    ) async throws -> EvidenceSearchResult {
         let normalized = query.normalizedRetrievalQuery
         guard !normalized.isEmpty else { return .empty }
         let candidateLimit = max(limit, configuration.candidateLimit)
-        let lexical = try await database.searchChunks(matching: normalized, limit: candidateLimit, matchAllTerms: false)
+        let lexical = try await database.searchChunks(
+            matching: normalized,
+            limit: candidateLimit,
+            matchAllTerms: false,
+            sourceIDs: sourceIDs
+        )
         var candidates = [UUID: Candidate]()
         try await add(lexical, rankWeight: 1, to: &candidates)
         return makeResult(from: candidates, limit: limit)
@@ -62,15 +88,22 @@ actor HybridEvidenceRetriever {
             }
 
         let evidence = selected.enumerated().map { index, candidate in
-            RetrievalEvidence(
+            let location = CitationSourceLocation.resolve(
+                sourceType: candidate.source.kind,
+                externalID: candidate.document.externalID,
+                metadata: candidate.document.metadata
+            )
+            return RetrievalEvidence(
                 citationID: "S\(index + 1)", chunkID: candidate.chunk.id,
                 sourceTitle: candidate.document.title, sourceType: candidate.source.kind,
-                sourcePath: candidate.document.metadata["path"] ?? candidate.document.metadata["relativePath"] ?? candidate.document.externalID,
+                sourcePath: location.reference,
                 sourceDate: candidate.document.modifiedAt ?? candidate.document.createdAt,
                 excerpt: String(candidate.chunk.text.prefix(max(1, configuration.contextCharacterBudget / max(limit, 1)))).trimmingCharacters(in: .whitespacesAndNewlines),
                 startOffset: candidate.chunk.startOffset,
                 endOffset: candidate.chunk.startOffset + min(candidate.chunk.text.utf16.count, max(1, configuration.contextCharacterBudget / max(limit, 1))),
-                pageNumber: candidate.chunk.pageNumber, score: candidate.score
+                pageNumber: candidate.chunk.pageNumber,
+                score: candidate.score,
+                sourceURL: location.url
             )
         }
         return EvidenceSearchResult(evidence: evidence, isLowConfidence: (evidence.first.map(\.score) ?? 0) < configuration.lowConfidenceThreshold)

@@ -279,12 +279,12 @@ final class ChatStoreTests: XCTestCase {
     func testStreamingProgressRenewsTheResponseTimeout() async throws {
         let store = ChatStore(
             responder: ProgressingSlowResponder(),
-            responseTimeout: .milliseconds(50)
+            responseTimeout: .milliseconds(200)
         )
         store.draft = "Keep streaming"
 
         store.startSendingDraft()
-        try await Task.sleep(for: .milliseconds(150))
+        try await Task.sleep(for: .milliseconds(500))
 
         XCTAssertFalse(store.isSending)
         XCTAssertEqual(store.messages.last?.text, "First second third")
@@ -466,9 +466,9 @@ private struct ProgressingSlowResponder: ChatResponder {
         AsyncThrowingStream { continuation in
             let task = Task {
                 continuation.yield("First")
-                try? await Task.sleep(for: .milliseconds(35))
+                try? await Task.sleep(for: .milliseconds(120))
                 continuation.yield(" second")
-                try? await Task.sleep(for: .milliseconds(35))
+                try? await Task.sleep(for: .milliseconds(120))
                 continuation.yield(" third")
                 continuation.finish()
             }

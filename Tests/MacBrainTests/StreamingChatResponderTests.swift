@@ -158,8 +158,7 @@ final class StreamingChatResponderTests: XCTestCase {
     func testGroundedResponseFallsBackToDirectEvidenceWhenModelOmitsCitations() async throws {
         let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
         let record = ConnectorRecord(kind: .folder, displayName: "Aurora", configuration: .init())
-        try await repository.save(record)
-        _ = try await repository.replaceDocuments(for: record.id, with: [
+        try await commitVerified(record, documents: [
             ConnectorDocument(
                 connectorID: record.id,
                 externalID: "aurora-release.md",
@@ -168,7 +167,7 @@ final class StreamingChatResponderTests: XCTestCase {
                 sourceLabel: "Aurora",
                 metadata: ["path": "/tmp/aurora-release.md"]
             )
-        ])
+        ], to: repository)
         let responder = StreamingChatResponder(
             provider: StreamingProvider(
                 statusValue: .ready(models: [.init(name: "qwen3:8b", size: nil, parameterSize: "8B", quantization: "Q4_K_M")]),
@@ -187,11 +186,37 @@ final class StreamingChatResponderTests: XCTestCase {
         XCTAssertFalse(response.joined().contains("Q3 2025"))
     }
 
+    func testEveryFactRequestUsesCompleteEvidenceWhenCitedModelAnswerOmitsAField() async throws {
+        let repository = try await seededRepository(
+            title: "Quartz decision",
+            text: "Lookup: AUDITNOTES417\nMarker: NOTESQUARTZ417\nDecision owner: Nila Quill\nTarget date: 2041-01-17",
+            path: "/tmp/quartz.md"
+        )
+        let responder = StreamingChatResponder(
+            provider: StreamingProvider(
+                statusValue: .ready(models: [.init(name: "qwen3:8b", size: nil, parameterSize: "8B", quantization: "Q4_K_M")]),
+                tokens: ["Marker: NOTESQUARTZ417 [S1]\nOwner: Nila Quill [S1]"]
+            ),
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder()
+        )
+
+        let response = try await collect(
+            responder.stream(to: "Search my folder for AUDITNOTES417 and report every labeled fact.")
+        ).joined()
+
+        XCTAssertTrue(response.contains("NOTESQUARTZ417"))
+        XCTAssertTrue(response.contains("Nila Quill"))
+        XCTAssertTrue(response.contains("2041-01-17"))
+        XCTAssertTrue(response.contains("Here is the matching local evidence"))
+        XCTAssertEqual(ChatCitationCard.parse(from: response).map(\.citationID), ["S1"])
+    }
+
     func testGroundedResponseDoesNotPreemptivelyRenderRawEvidence() async throws {
         let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
         let record = ConnectorRecord(kind: .folder, displayName: "Aurora", configuration: .init())
-        try await repository.save(record)
-        _ = try await repository.replaceDocuments(for: record.id, with: [
+        try await commitVerified(record, documents: [
             ConnectorDocument(
                 connectorID: record.id,
                 externalID: "aurora-release.md",
@@ -200,7 +225,7 @@ final class StreamingChatResponderTests: XCTestCase {
                 sourceLabel: "Aurora",
                 metadata: ["path": "/tmp/aurora-release.md"]
             )
-        ])
+        ], to: repository)
         let responder = StreamingChatResponder(
             provider: StreamingProvider(
                 statusValue: .ready(models: [.init(name: "qwen3:8b", size: nil, parameterSize: "8B", quantization: "Q4_K_M")]),
@@ -217,11 +242,35 @@ final class StreamingChatResponderTests: XCTestCase {
         XCTAssertFalse(response.joined().contains("I can only verify the following local evidence:"))
     }
 
+    func testGroundedPromptSeparatesSourceProvenanceFromAnswerableContent() async throws {
+        let repository = try await seededRepository(
+            title: "Quartz decision",
+            text: "Lookup: AUDITNOTES417\nMarker: NOTESQUARTZ417\nDecision owner: Nila Quill\nTarget date: 2041-01-17",
+            path: "/tmp/quartz.md"
+        )
+        let provider = CapturingStreamingProvider()
+        let responder = StreamingChatResponder(
+            provider: provider,
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder()
+        )
+
+        _ = try await collect(responder.stream(to: "Search my folder for AUDITNOTES417 and report every exact controlled fact."))
+
+        let systemPrompt = try XCTUnwrap(provider.messages.first(where: { $0.role == .system })?.content)
+        XCTAssertTrue(systemPrompt.contains("BEGIN SOURCE [S1]"))
+        XCTAssertTrue(systemPrompt.contains("PROVENANCE (identifies the record; do not use it as the answer)"))
+        XCTAssertTrue(systemPrompt.contains("CONTENT (the facts you must answer from)"))
+        XCTAssertTrue(systemPrompt.contains("Marker: NOTESQUARTZ417"))
+        XCTAssertTrue(systemPrompt.contains("A grounded answer without a bracketed citation ID will be discarded"))
+        XCTAssertTrue(systemPrompt.contains("include every labeled CONTENT field except the lookup key"))
+    }
+
     func testCancellingGroundedResponseDoesNotRenderRawEvidence() async throws {
         let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
         let record = ConnectorRecord(kind: .folder, displayName: "Aurora", configuration: .init())
-        try await repository.save(record)
-        _ = try await repository.replaceDocuments(for: record.id, with: [
+        try await commitVerified(record, documents: [
             ConnectorDocument(
                 connectorID: record.id,
                 externalID: "aurora-release.md",
@@ -230,7 +279,7 @@ final class StreamingChatResponderTests: XCTestCase {
                 sourceLabel: "Aurora",
                 metadata: ["path": "/tmp/aurora-release.md"]
             )
-        ])
+        ], to: repository)
         let provider = PausingStreamingProvider()
         let responder = StreamingChatResponder(
             provider: provider,
@@ -262,8 +311,7 @@ final class StreamingChatResponderTests: XCTestCase {
     func testMultiDocumentResponseAcceptsKnownCitedSubsetAndRendersOnlyThatSource() async throws {
         let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
         let record = ConnectorRecord(kind: .folder, displayName: "Aurora", configuration: .init())
-        try await repository.save(record)
-        _ = try await repository.replaceDocuments(for: record.id, with: [
+        try await commitVerified(record, documents: [
             ConnectorDocument(
                 connectorID: record.id,
                 externalID: "notes.md",
@@ -280,7 +328,7 @@ final class StreamingChatResponderTests: XCTestCase {
                 sourceLabel: "Aurora",
                 metadata: ["path": "/tmp/plan.txt"]
             )
-        ])
+        ], to: repository)
         let responder = StreamingChatResponder(
             provider: StreamingProvider(
                 statusValue: .ready(models: [.init(name: "qwen3:8b", size: nil, parameterSize: "8B", quantization: "Q4_K_M")]),
@@ -366,7 +414,7 @@ final class StreamingChatResponderTests: XCTestCase {
 
         let response = try await collect(responder.stream(to: "Who owns the Aurora beta decision?")).joined()
 
-        XCTAssertTrue(response.contains("couldn't verify a grounded answer"))
+        XCTAssertTrue(response.contains("Here is the matching local evidence"))
         XCTAssertFalse(response.contains("<html>"))
         XCTAssertFalse(response.contains("S99"))
         XCTAssertLessThan(response.count, 1_500)
@@ -438,7 +486,7 @@ final class StreamingChatResponderTests: XCTestCase {
             systemProfileProvider: FixedSystemProfileProvider(profile: profile)
         )
 
-        _ = try await collect(responder.stream(to: "Who am I and what Mac am I using?"))
+        _ = try await collect(responder.stream(to: "Explain black holes"))
 
         let systemInstruction = try XCTUnwrap(provider.messages.first(where: { $0.role == .system })?.content)
         XCTAssertTrue(systemInstruction.contains("Siddhant Gupta"))
@@ -537,8 +585,7 @@ final class StreamingChatResponderTests: XCTestCase {
             displayName: "Test folder",
             configuration: .init(localPath: directory.path)
         )
-        try await repository.save(record)
-        _ = try await repository.replaceDocuments(for: record.id, with: [
+        try await commitVerified(record, documents: [
             ConnectorDocument(
                 connectorID: record.id,
                 externalID: fileURL.path,
@@ -547,7 +594,7 @@ final class StreamingChatResponderTests: XCTestCase {
                 sourceLabel: "Test folder",
                 metadata: ["path": fileURL.path, "relativePath": "notes.md"]
             )
-        ])
+        ], to: repository)
         try Data("# Notes\nFresh file content".utf8).write(to: fileURL)
 
         let provider = CapturingStreamingProvider()
@@ -565,7 +612,7 @@ final class StreamingChatResponderTests: XCTestCase {
         XCTAssertTrue(rendered.contains("Fresh file content"))
         XCTAssertFalse(rendered.contains("Original indexed text"))
         XCTAssertEqual(sourceCards.map(\.citationID), ["S1"])
-        XCTAssertEqual(sourceCards.first?.url.standardizedFileURL, fileURL.standardizedFileURL)
+        XCTAssertEqual(sourceCards.first?.url?.standardizedFileURL, fileURL.standardizedFileURL)
         XCTAssertTrue(provider.messages.isEmpty)
     }
 
@@ -649,8 +696,7 @@ final class StreamingChatResponderTests: XCTestCase {
         let database = try MacBrainDatabase(url: directory.appendingPathComponent("macbrain.sqlite"))
         let repository = LocalSourceRepository(fileURL: directory.appendingPathComponent("sources.json"), database: database)
         let record = ConnectorRecord(kind: .folder, displayName: "Seeded", configuration: .init())
-        try await repository.save(record)
-        _ = try await repository.replaceDocuments(for: record.id, with: [
+        try await commitVerified(record, documents: [
             ConnectorDocument(
                 connectorID: record.id,
                 externalID: path,
@@ -659,8 +705,23 @@ final class StreamingChatResponderTests: XCTestCase {
                 sourceLabel: "Seeded",
                 metadata: ["path": path]
             )
-        ])
+        ], to: repository)
         return repository
+    }
+
+    private func commitVerified(
+        _ record: ConnectorRecord,
+        documents: [ConnectorDocument],
+        to repository: LocalSourceRepository
+    ) async throws {
+        var verifiedRecord = record
+        verifiedRecord.configuration.initialSyncCompleted = true
+        verifiedRecord.status = .ready
+        verifiedRecord.lastSuccessfulSync = .now
+        _ = try await repository.commitSourceGeneration(
+            record: verifiedRecord,
+            documents: documents
+        )
     }
 
     private func temporaryRepositoryURL() throws -> URL {

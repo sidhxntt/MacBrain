@@ -19,6 +19,7 @@ struct ChatQueryRoute: Equatable, Sendable {
 struct ChatQueryIntentRouter: Sendable {
     func route(prompt: String, conversation: [ChatMessage]) -> ChatQueryRoute {
         let normalized = normalize(prompt)
+        let containsOriginalPath = containsPathOrFileReference(prompt.lowercased())
 
         if PrivacyPromptPolicy.response(for: normalized) != nil {
             return ChatQueryRoute(intent: .restricted, reason: "privacy policy matched")
@@ -36,7 +37,7 @@ struct ChatQueryIntentRouter: Sendable {
             return ChatQueryRoute(intent: .general, reason: "public knowledge form requested")
         }
 
-        if isExplicitLocalRequest(normalized) {
+        if containsOriginalPath || isExplicitLocalRequest(normalized) {
             return ChatQueryRoute(intent: .explicitLocal, reason: "connected or personal source requested")
         }
 
@@ -52,12 +53,7 @@ struct ChatQueryIntentRouter: Sendable {
     }
 
     private func normalize(_ prompt: String) -> String {
-        prompt
-            .lowercased()
-            .replacingOccurrences(of: "’", with: "'")
-            .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
-            .split(whereSeparator: { $0.isWhitespace })
-            .joined(separator: " ")
+        SourceVocabulary.normalize(prompt).text
     }
 
     private func isLiveMacRequest(_ prompt: String) -> Bool {
@@ -92,8 +88,10 @@ struct ChatQueryIntentRouter: Sendable {
             "indexed source", "my files", "my documents", "my notes", "my mail", "my email",
             "my calendar", "my reminders", "my contacts", "my messages", "my photos",
             "my browser history", "my repository", "my repo", "my code", "my downloads",
+            "my bookmarks",
             "my test folder", "my apple books", "my books", "my work calendar", "open tabs",
-            "tabs do i have open", "this repo", "this repository", "this folder", "this file",
+            "tabs do i have open", "this repo", "this repository", "this git repo", "this git repository",
+            "this folder", "this file",
             "according to my", "from my files", "i have saved", "did i download",
             "latest message i received", "contact named", "metadata for my photos"
         ]) {
@@ -180,7 +178,7 @@ struct ChatQueryIntentRouter: Sendable {
     }
 
     private static let casualPrompts: Set<String> = [
-        "hello", "hi", "hey", "what's up", "how are you", "how's it going",
+        "hello", "hi", "hey", "what s up", "how are you", "how s it going",
         "good morning", "good afternoon", "good evening", "thanks", "thank you",
         "nice to meet you", "okay", "got it", "cool", "whats up", "thx", "ok",
         "hello there", "hey there"

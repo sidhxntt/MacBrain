@@ -17,7 +17,7 @@
 - Modify: `Sources/MacBrain/Models/SourceConnector.swift`
 - Create: `Tests/MacBrainTests/ConnectorIndexHealthTests.swift`
 
-- [ ] **Step 1: Write failing domain tests**
+- [x] **Step 1: Write failing domain tests**
 
 ```swift
 import Foundation
@@ -56,7 +56,7 @@ struct ConnectorIndexHealthTests {
 }
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run:
 
@@ -68,7 +68,7 @@ env CLANG_MODULE_CACHE_PATH=/tmp/macbrain-clang-module-cache \
 
 Expected: compilation fails because `ConnectorIndexHealth` does not exist and the current record default is `.ready`.
 
-- [ ] **Step 3: Add the domain model and safe default**
+- [x] **Step 3: Add the domain model and safe default**
 
 ```swift
 import Foundation
@@ -110,7 +110,7 @@ struct ConnectorIndexHealth: Codable, Equatable, Sendable {
 
 Change the `ConnectorRecord` initializer default to `status: ConnectorStatus = .syncing`.
 
-- [ ] **Step 4: Run the focused test and verify GREEN**
+- [x] **Step 4: Run the focused test and verify GREEN**
 
 Run the Step 2 command. Expected: all three tests pass.
 
@@ -120,7 +120,7 @@ Run the Step 2 command. Expected: all three tests pass.
 - Modify: `Sources/MacBrain/Services/MacBrainDatabase.swift`
 - Modify: `Tests/MacBrainTests/MacBrainDatabaseTests.swift`
 
-- [ ] **Step 1: Write failing migration and round-trip tests**
+- [x] **Step 1: Write failing migration and round-trip tests**
 
 Add Swift Testing coverage that creates a fresh database, asserts schema version 11, saves a `ConnectorIndexHealth`, reopens the database, and compares every field. Also save/read `legacy_source_import_complete = true` through metadata APIs.
 
@@ -146,13 +146,13 @@ Add Swift Testing coverage that creates a fresh database, asserts schema version
 }
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `swift test --filter 'MacBrainDatabaseTests|ConnectorIndexHealthTests'`
 
 Expected: missing index-health and metadata APIs.
 
-- [ ] **Step 3: Add migration 11 and typed APIs**
+- [x] **Step 3: Add migration 11 and typed APIs**
 
 Increment `currentSchemaVersion` to 11 and add:
 
@@ -183,7 +183,7 @@ func setMetadata(_ key: String, value: String) throws
 func metadata(_ key: String) throws -> String?
 ```
 
-- [ ] **Step 4: Run and verify GREEN**
+- [x] **Step 4: Run and verify GREEN**
 
 Run the Step 2 command. Expected: migration and round-trip tests pass.
 
@@ -193,7 +193,7 @@ Run the Step 2 command. Expected: migration and round-trip tests pass.
 - Modify: `Sources/MacBrain/Services/MacBrainDatabase.swift`
 - Create: `Tests/MacBrainTests/SourceIndexCommitTests.swift`
 
-- [ ] **Step 1: Write failing atomic-commit tests**
+- [x] **Step 1: Write failing atomic-commit tests**
 
 Test a successful source-generation replacement, an empty verified generation, and an injected failure after document insertion. The failed transaction must retain the previous document, FTS match, connector record, and health revision.
 
@@ -210,13 +210,13 @@ Test a successful source-generation replacement, an empty verified generation, a
 }
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `swift test --filter SourceIndexCommitTests`
 
 Expected: the transactional source-generation API is missing.
 
-- [ ] **Step 3: Implement one transactional commit boundary**
+- [x] **Step 3: Implement one transactional commit boundary**
 
 Add:
 
@@ -235,7 +235,7 @@ func commitSourceGeneration(
 
 Inside one `connection.transaction`, replace changed/removed documents and their chunks/FTS rows, save the connector record, count committed documents and chunks, update `source_index_state`, and validate that every live chunk has one FTS row. Return counts read from the committed transaction. Do not mutate the caller-visible record to ready before this method succeeds.
 
-- [ ] **Step 4: Run and verify GREEN**
+- [x] **Step 4: Run and verify GREEN**
 
 Run the Step 2 command. Expected: all atomicity cases pass.
 
@@ -246,19 +246,19 @@ Run the Step 2 command. Expected: all atomicity cases pass.
 - Modify: `Sources/MacBrain/Services/MacBrainDatabase.swift`
 - Create: `Tests/MacBrainTests/LocalSourceBootstrapTests.swift`
 
-- [ ] **Step 1: Reproduce the split-store bug**
+- [x] **Step 1: Reproduce the split-store bug**
 
 Create a legacy snapshot containing one ready Apple Notes record and 18 normalized documents, use an empty SQLite database, then bootstrap. Assert the SQLite count and FTS search both become 18/searchable without changing the incoming connector data.
 
 Also reproduce the unchanged-sync repair: delete SQLite documents after a successful import, call `replaceDocuments` with the identical incoming documents, and expect the index to be rebuilt.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `swift test --filter LocalSourceBootstrapTests`
 
 Expected: SQLite stays empty because unchanged snapshot data returns early.
 
-- [ ] **Step 3: Add idempotent repository bootstrap**
+- [x] **Step 3: Add idempotent repository bootstrap**
 
 Implement:
 
@@ -272,7 +272,7 @@ Bootstrap must migrate SQLite, import the decoded schema-2 snapshot only when th
 
 When a database is configured, compare incoming documents with SQLite rather than returning solely from the legacy in-memory comparison. Stop persisting production runtime documents to JSON after bootstrap. Preserve JSON-only behavior for explicitly constructed database-free test repositories.
 
-- [ ] **Step 4: Run repair tests and restart tests**
+- [x] **Step 4: Run repair tests and restart tests**
 
 Run: `swift test --filter 'LocalSourceBootstrapTests|MacBrainDatabaseTests'`
 
@@ -286,7 +286,7 @@ Expected: split-store, unchanged repair, idempotent second bootstrap, and restar
 - Modify: `Sources/MacBrain/Stores/SourceLibraryStore.swift`
 - Create: `Tests/MacBrainTests/ConnectorLifecycleTests.swift`
 
-- [ ] **Step 1: Write fresh-connect and interrupted-sync failures**
+- [x] **Step 1: Write fresh-connect and interrupted-sync failures**
 
 Use a controlled connector that blocks before returning documents. Assert create/connect publishes `.syncing`, never `.ready`; resolving the connector commits searchable FTS before `.ready`; zero documents produce verified empty-ready; and `recoverInterruptedSyncs` verifies/restarts rather than assigning ready.
 
@@ -303,19 +303,19 @@ Use a controlled connector that blocks before returning documents. Assert create
 }
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `swift test --filter ConnectorLifecycleTests`
 
 Expected: records start ready and interrupted sync is optimistically recovered.
 
-- [ ] **Step 3: Route every connector through verified commit**
+- [x] **Step 3: Route every connector through verified commit**
 
 Update nonbatched, file-backed, and batched sync paths to build a `ConnectorIndexHealth`, call the repository transactional commit/verification boundary, and only then save `.ready`. Keep the last verified health during refresh failure. Replace optimistic interrupted-sync recovery with repository verification followed by safe resume/restart.
 
 Initial sync must enqueue changed chunks after the lexical commit. `addAndSync`, Browser Profiles, manual sync, resume, and authorization retry must share this coordinator path.
 
-- [ ] **Step 4: Run and verify GREEN**
+- [x] **Step 4: Run and verify GREEN**
 
 Run: `swift test --filter 'ConnectorLifecycleTests|SourceConnectorTests|MacBrainDatabaseTests'`
 
@@ -329,7 +329,7 @@ Expected: all lifecycle variants pass, including empty libraries and restart.
 - Modify: `Sources/MacBrain/App/AppCoordinator.swift`
 - Create: `Tests/MacBrainTests/ConnectorRefreshSchedulerTests.swift`
 
-- [ ] **Step 1: Write deterministic scheduler tests**
+- [x] **Step 1: Write deterministic scheduler tests**
 
 Define an injected sleeper/clock and controlled refresh operation. Cover exactly 300 seconds, due filtering, maximum concurrency, per-source coalescing, failure isolation, cancellation, and shutdown without using wall-clock sleeps.
 
@@ -356,21 +356,21 @@ protocol ConnectorRefreshClock: Sendable {
 
 The test target provides a `ManualConnectorRefreshClock` actor whose `sleep(for:)` stores checked continuations and whose `advance(by:)` resumes only deadlines reached by the advanced logical time. This makes the 300-second boundary and cancellation deterministic without wall-clock sleeps.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `swift test --filter ConnectorRefreshSchedulerTests`
 
 Expected: scheduler types are missing.
 
-- [ ] **Step 3: Implement the actor**
+- [x] **Step 3: Implement the actor**
 
 Use one lifecycle-owned loop task, cancellation-aware `Clock.sleep`, an in-flight source-ID set, and a bounded task group that adds another source only when one child completes. Return per-source outcomes instead of throwing the whole group. Expose next-run time and events through `AsyncStream` or injected `@MainActor` sinks.
 
-- [ ] **Step 4: Integrate scheduler ownership**
+- [x] **Step 4: Integrate scheduler ownership**
 
 `AppCoordinator.start` must await repository bootstrap before starting the scheduler. `stop` cancels and awaits scheduler shutdown. `SourceLibraryStore` consumes progress events and never performs scanning, hashing, or database work on the main actor.
 
-- [ ] **Step 5: Run and verify GREEN**
+- [x] **Step 5: Run and verify GREEN**
 
 Run: `swift test --filter 'ConnectorRefreshSchedulerTests|ConnectorLifecycleTests|SourceConnectorTests'`
 
@@ -384,21 +384,21 @@ Expected: deterministic scheduling and existing refresh behavior pass.
 - Modify: `Tests/MacBrainTests/LocalSourceCapabilityResponderTests.swift`
 - Create: `Tests/MacBrainTests/SourcePresentationStateTests.swift`
 
-- [ ] **Step 1: Write failing split-state and empty-state tests**
+- [x] **Step 1: Write failing split-state and empty-state tests**
 
 Assert a `.ready` record with unverified/zero SQLite health is described as not yet searchable, a verified zero-document source is described as connected but empty, a verified nonempty source is ready, and a background refresh keeps the ready index available.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `swift test --filter 'LocalSourceCapabilityResponderTests|SourcePresentationStateTests'`
 
 Expected: the capability responder trusts record status alone.
 
-- [ ] **Step 3: Render one derived presentation state**
+- [x] **Step 3: Render one derived presentation state**
 
 Create a pure mapping from `(ConnectorRecord, ConnectorIndexHealth?)` to connecting, syncing, ready, empty, paused, permission-needed, or failed-with-retained-index. Feed this mapping to both capability responses and Source Manager cards. Never display “ready to search” without verified health.
 
-- [ ] **Step 4: Run and verify GREEN**
+- [x] **Step 4: Run and verify GREEN**
 
 Run the Step 2 command. Expected: all truthful-state cases pass.
 
@@ -407,7 +407,7 @@ Run the Step 2 command. Expected: all truthful-state cases pass.
 **Files:**
 - Modify: `Tests/StressTests/production_chat_acceptance_audit.md`
 
-- [ ] **Step 1: Run focused core tests**
+- [x] **Step 1: Run focused core tests**
 
 ```sh
 env CLANG_MODULE_CACHE_PATH=/tmp/macbrain-clang-module-cache \
@@ -417,13 +417,13 @@ env CLANG_MODULE_CACHE_PATH=/tmp/macbrain-clang-module-cache \
 
 Expected: zero failures.
 
-- [ ] **Step 2: Run the full deterministic suite**
+- [x] **Step 2: Run the full deterministic suite**
 
 Run: `swift test`
 
 Expected: zero failures; opt-in live Ollama tests skip unless enabled.
 
-- [ ] **Step 3: Run focused Thread Sanitizer verification**
+- [x] **Step 3: Run focused Thread Sanitizer verification**
 
 Run:
 
@@ -433,6 +433,6 @@ swift test --sanitize=thread --filter 'ConnectorLifecycleTests|ConnectorRefreshS
 
 Expected: zero test failures and no data-race reports.
 
-- [ ] **Step 4: Record evidence**
+- [x] **Step 4: Record evidence**
 
 Add exact commands/results for fresh connect, split-store repair, verified readiness, five-minute scheduling, concurrency, cancellation, and no-source-edit acceptance. Do not claim real Apple permission behavior from synthetic connectors.

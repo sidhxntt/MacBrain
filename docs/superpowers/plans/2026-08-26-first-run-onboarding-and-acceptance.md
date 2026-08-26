@@ -17,7 +17,7 @@
 - Create: `Sources/MacBrain/Stores/OnboardingStore.swift`
 - Create: `Tests/MacBrainTests/OnboardingStoreTests.swift`
 
-- [ ] **Step 1: Write failing state-transition tests**
+- [x] **Step 1: Write failing state-transition tests**
 
 ```swift
 import Foundation
@@ -46,13 +46,13 @@ struct OnboardingStoreTests {
 }
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `swift test --filter OnboardingStoreTests`
 
 Expected: onboarding types are missing.
 
-- [ ] **Step 3: Implement explicit state**
+- [x] **Step 3: Implement explicit state**
 
 ```swift
 enum OnboardingStep: Int, CaseIterable, Sendable {
@@ -110,7 +110,7 @@ final class OnboardingStore: ObservableObject {
 
 Use namespaced preference keys and persist only completion state/step, never connector content.
 
-- [ ] **Step 4: Run and verify GREEN**
+- [x] **Step 4: Run and verify GREEN**
 
 Run the Step 2 command. Expected: fresh, completion, relaunch, navigation, and reopen tests pass.
 
@@ -120,21 +120,21 @@ Run the Step 2 command. Expected: fresh, completion, relaunch, navigation, and r
 - Create: `Sources/MacBrain/Models/OnboardingPresentation.swift`
 - Create: `Tests/MacBrainTests/OnboardingPresentationTests.swift`
 
-- [ ] **Step 1: Write failing copy/capability tests**
+- [x] **Step 1: Write failing copy/capability tests**
 
 Assert all four steps have a title, concise explanation, system symbol, primary action, accessibility summary, and no cloud/privacy overclaim. Ready-step examples must be derived from verified source health and available system capabilities, never unavailable sources.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `swift test --filter OnboardingPresentationTests`
 
 Expected: presentation model is missing.
 
-- [ ] **Step 3: Add pure presentation mapping**
+- [x] **Step 3: Add pure presentation mapping**
 
 Define `OnboardingPagePresentation` and `OnboardingReadySummary`. Map connector presentation states into ready, empty, syncing, permission-needed, optional, and failed groups. Generate examples such as “How many notes do I have?” only when Notes is verified, and always allow safe system examples such as RAM/storage/specifications.
 
-- [ ] **Step 4: Run and verify GREEN**
+- [x] **Step 4: Run and verify GREEN**
 
 Run the Step 2 command. Expected: content, privacy, state grouping, and example-selection tests pass.
 
@@ -147,17 +147,17 @@ Run the Step 2 command. Expected: content, privacy, state grouping, and example-
 - Create: `Sources/MacBrain/Views/OnboardingReadyView.swift`
 - Modify: `Sources/MacBrain/Views/OllamaSetupView.swift`
 
-- [ ] **Step 1: Add a construction/accessibility smoke test**
+- [x] **Step 1: Add a construction/accessibility smoke test**
 
 Create an `@MainActor` test that constructs each step with fixed stores and verifies the pure presentation model supplies the accessibility label and actions. SwiftUI UI behavior remains for UI automation/manual acceptance.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `swift test --filter OnboardingPresentationTests`
 
 Expected: onboarding views are missing from the construction test.
 
-- [ ] **Step 3: Implement the four pages**
+- [x] **Step 3: Implement the four pages**
 
 Use `NavigationStack`, semantic colors/materials already used by MacBrain, a 4/8-point spacing grid, standard controls, keyboard/default actions, and reduced-motion support.
 
@@ -168,7 +168,7 @@ Use `NavigationStack`, semantic colors/materials already used by MacBrain, a 4/8
 
 Provide Back, Continue, Continue with limited context, and Finish actions. Never display source content in onboarding progress.
 
-- [ ] **Step 4: Run construction tests and build**
+- [x] **Step 4: Run construction tests and build**
 
 Run:
 
@@ -187,21 +187,21 @@ Expected: tests and macOS build pass without warnings introduced by the new view
 - Modify: `Sources/MacBrain/Views/MacBrainPreferencesView.swift`
 - Modify: `Tests/MacBrainTests/MacBrainWorkspaceViewTests.swift`
 
-- [ ] **Step 1: Write failing composition tests**
+- [x] **Step 1: Write failing composition tests**
 
 Construct an `AppCoordinator` with isolated defaults. Assert fresh state is presented, configured/limited completion suppresses automatic presentation on relaunch, and Settings `reopen` restores it without clearing connector data.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `swift test --filter 'OnboardingStoreTests|MacBrainWorkspaceViewTests'`
 
 Expected: coordinator/workspace do not own onboarding state.
 
-- [ ] **Step 3: Wire one shared store**
+- [x] **Step 3: Wire one shared store**
 
 Add `let onboardingStore: OnboardingStore` to `AppCoordinator`. Observe it in `MacBrainWorkspaceView` and present `MacBrainOnboardingView` as a non-dismissable-by-accident first-run sheet while still providing explicit limited completion. Add “Run Setup Again” to Settings. Do not recreate `SourceLibraryStore` or `InferenceStore`; onboarding receives the shared instances so connection starts the normal immediate sync path.
 
-- [ ] **Step 4: Run and verify GREEN**
+- [x] **Step 4: Run and verify GREEN**
 
 Run the Step 2 command. Expected: composition and persistence tests pass.
 
@@ -212,11 +212,11 @@ Run the Step 2 command. Expected: composition and persistence tests pass.
 - Create: `Tests/MacBrainTests/FreshInstallSystemE2ETests.swift`
 - Modify: `Tests/MacBrainTests/ConnectorAdversarialE2ETests.swift`
 
-- [ ] **Step 1: Write an isolated app-dependency fixture**
+- [x] **Step 1: Write an isolated app-dependency fixture**
 
 Create temporary SQLite, legacy snapshot, defaults suite, fixed connector, controlled clock, provider probe, and fixed system-facts provider. Compose the same repository/coordinator/scheduler/planner/responder graph as `AppCoordinator`.
 
-- [ ] **Step 2: Add the no-source-edit journey**
+- [x] **Step 2: Add the no-source-edit journey**
 
 ```swift
 @Test func freshInstallConnectSyncAskRequiresNoSourceMutation() async throws {
@@ -233,11 +233,11 @@ Create temporary SQLite, legacy snapshot, defaults suite, fixed connector, contr
 
 Add verified empty, count, restart, 300-second refresh, refresh-while-chatting, refresh failure isolation, permission revoke, deletion, and semantic-timeout cases.
 
-- [ ] **Step 3: Add broad system journey cases**
+- [x] **Step 3: Add broad system journey cases**
 
 Ask installed/current RAM, available storage, full specifications, macOS, uptime, battery, apps, network, displays, and unsupported maximum wording through the production responder graph. Assert dynamic facts are sampled for every request and no provider call is needed for direct facts.
 
-- [ ] **Step 4: Run focused E2E tests**
+- [x] **Step 4: Run focused E2E tests**
 
 Run:
 
@@ -254,7 +254,7 @@ Expected: every journey terminates with zero stale, unauthorized, cross-source, 
 - Modify: `Tests/StressTests/production_chat_acceptance_audit.md`
 - Modify: `docs/todos/onboarding.md`
 
-- [ ] **Step 1: Run the full deterministic suite**
+- [x] **Step 1: Run the full deterministic suite**
 
 Run:
 
@@ -266,7 +266,7 @@ env CLANG_MODULE_CACHE_PATH=/tmp/macbrain-clang-module-cache \
 
 Expected: zero failures; opt-in live tests skip explicitly.
 
-- [ ] **Step 2: Run focused Thread Sanitizer**
+- [x] **Step 2: Run focused Thread Sanitizer**
 
 Run:
 
@@ -276,7 +276,7 @@ swift test --sanitize=thread --filter 'FreshInstallConnectorE2ETests|ConnectorRe
 
 Expected: zero failures and no race reports.
 
-- [ ] **Step 3: Verify release-style build and launch**
+- [x] **Step 3: Verify release-style build and launch**
 
 Run:
 
@@ -287,7 +287,7 @@ swift build -c release
 
 Expected: app builds and launches without blocking or stealing unintended focus.
 
-- [ ] **Step 4: Run real local-model verification when Ollama is available**
+- [x] **Step 4: Run real local-model verification when Ollama is available**
 
 Run:
 
@@ -313,7 +313,7 @@ Using an isolated app-data directory or clean test account:
 7. revoke permission and verify immediate exclusion after revalidation;
 8. ask RAM, storage, and specification questions and compare with macOS.
 
-- [ ] **Step 6: Update evidence documents accurately**
+- [x] **Step 6: Update evidence documents accurately**
 
 Record command output, test counts, installed-app observations, permission states, Ollama availability, and any remaining unverified item. Mark completed onboarding checklist items only when their behavior is present. Do not use synthetic tests as evidence for real macOS permission prompts.
 
@@ -322,11 +322,11 @@ Record command output, test counts, installed-app observations, permission state
 **Files:**
 - Modify: `Tests/StressTests/production_chat_acceptance_audit.md`
 
-- [ ] **Step 1: Map every product requirement to authoritative evidence**
+- [x] **Step 1: Map every product requirement to authoritative evidence**
 
 Create an audit table covering fresh install, onboarding, one-time connection, no source mutation, immediate sync, verified readiness, empty source, 300-second concurrent refresh, UI responsiveness, open-ended connector prompts, counts/date queries, lexical timeout fallback, system domains, restart repair, authorization/removal isolation, citations, cache revisions, and privacy.
 
-- [ ] **Step 2: Inspect rather than infer completion**
+- [x] **Step 2: Inspect rather than infer completion**
 
 For every row, cite a named passing test, current command output, or real runtime observation. Treat missing, indirect, synthetic-only, skipped, or stale evidence as not achieved and continue implementation/verification.
 

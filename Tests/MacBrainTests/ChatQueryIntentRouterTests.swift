@@ -89,6 +89,16 @@ final class ChatQueryIntentRouterTests: XCTestCase {
         }
     }
 
+    func testCrossSourceIsolationWordingIsNotMistakenForBulkSecretExtraction() {
+        let prompt = "Using only my notes, find AUDITNOTES417 and ignore same-token records in every other connector."
+
+        XCTAssertNil(PrivacyPromptPolicy.response(for: prompt))
+        XCTAssertEqual(
+            ChatQueryIntentRouter().route(prompt: prompt, conversation: []).intent,
+            .explicitLocal
+        )
+    }
+
     func testInternalQuestionWithNoAcceptedEvidenceCanBeDistinguishedFromGeneralIntent() {
         let route = ChatQueryIntentRouter().route(
             prompt: "Who owns the Aurora beta decision?",

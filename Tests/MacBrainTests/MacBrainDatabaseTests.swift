@@ -1,4 +1,5 @@
 import XCTest
+import SQLite3
 @testable import MacBrain
 
 final class MacBrainDatabaseTests: XCTestCase {
@@ -31,6 +32,25 @@ final class MacBrainDatabaseTests: XCTestCase {
         XCTAssertEqual(persistedMemories.map(\.id), [memory.id])
         XCTAssertEqual(persistedMemories.map(\.text), [memory.text])
         XCTAssertEqual(version, MacBrainDatabase.currentSchemaVersion)
+    }
+
+    func testDatabaseWaitsForAnotherShortLivedWriter() async throws {
+        let url = try temporaryDatabaseURL()
+        let database = try MacBrainDatabase(url: url)
+        try await database.migrate()
+
+        var writer: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(url.path, &writer, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil), SQLITE_OK)
+        defer { sqlite3_close(writer) }
+        XCTAssertEqual(sqlite3_exec(writer, "BEGIN IMMEDIATE", nil, nil, nil), SQLITE_OK)
+
+        let save = Task {
+            try await database.save(source: StoredSource(id: UUID(), kind: "notes", displayName: "Contended write"))
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(sqlite3_exec(writer, "COMMIT", nil, nil, nil), SQLITE_OK)
+
+        try await save.value
     }
 
     func testDocumentWriteIsAtomicAndProvidesFTSAndVectorSearch() async throws {
@@ -103,6 +123,35 @@ final class MacBrainDatabaseTests: XCTestCase {
         XCTAssertEqual(mirroredRecord?.configuration.localPath, record.configuration.localPath)
         XCTAssertEqual(matches.count, 1)
         XCTAssertEqual(matches.first?.text, document.text)
+    }
+
+    func testBatchedSourceMergeIndexesOnlyItsChangedBatch() async throws {
+        let database = try MacBrainDatabase(url: try temporaryDatabaseURL())
+        let repository = LocalSourceRepository(fileURL: try temporaryDatabaseURL(), database: database)
+        let record = ConnectorRecord(kind: .photos, displayName: "Photos metadata", configuration: .init())
+        let original = ConnectorDocument(
+            connectorID: record.id,
+            externalID: "asset-1",
+            title: "Original photo",
+            text: "mountain sunrise",
+            sourceLabel: "Photos"
+        )
+        let changed = ConnectorDocument(
+            connectorID: record.id,
+            externalID: "asset-2",
+            title: "Changed photo",
+            text: "ocean sunset",
+            sourceLabel: "Photos"
+        )
+        try await repository.save(record)
+
+        _ = try await repository.mergeDocuments(for: record.id, with: [original], updateSearchIndex: false)
+        _ = try await repository.mergeDocuments(for: record.id, with: [changed], updateSearchIndex: false)
+
+        let mountainMatches = try await database.searchDocuments(matching: "mountain")
+        let oceanMatches = try await database.searchDocuments(matching: "ocean")
+        XCTAssertEqual(mountainMatches.count, 1)
+        XCTAssertEqual(oceanMatches.count, 1)
     }
 
     func testFilenameAndRelativePathAreSearchableLocalEvidence() async throws {
@@ -239,7 +288,10 @@ final class MacBrainDatabaseTests: XCTestCase {
         let repository = try LocalChatSessionRepository(database: MacBrainDatabase(url: try temporaryDatabaseURL()))
         let open = ChatSession(
             title: "Local decisions",
-            messages: [ChatMessage(role: .user, text: "Keep this offline")],
+            messages: [
+                ChatMessage(role: .user, text: "Keep this offline"),
+                ChatMessage(role: .assistant, text: "Grounded [S1]", groundingSourceIDs: ["S1"])
+            ],
             greeting: "Welcome back"
         )
         let archived = ChatSession(title: "Old chat", messages: [], greeting: "Earlier")
@@ -248,7 +300,8 @@ final class MacBrainDatabaseTests: XCTestCase {
         let restored = try await repository.load()
 
         XCTAssertEqual(restored.open.map(\.id), [open.id])
-        XCTAssertEqual(restored.open.first?.messages.map(\.text), ["Keep this offline"])
+        XCTAssertEqual(restored.open.first?.messages.map(\.text), ["Keep this offline", "Grounded [S1]"])
+        XCTAssertEqual(restored.open.first?.messages.last?.groundingSourceIDs, ["S1"])
         XCTAssertEqual(restored.archived.map(\.id), [archived.id])
         XCTAssertEqual(restored.pinnedSessionIDs, [open.id])
     }

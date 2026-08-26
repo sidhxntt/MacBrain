@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import MacBrain
 
@@ -27,6 +28,20 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertFalse(store.isSending)
     }
 
+    func testCompletedGroundedResponseRecordsCitationIDsForNextTurn() async {
+        let grounded = "Decision is local-first [S1].\n\n### Sources\n- [S1](file:///tmp/decision.md) Decision record"
+        let responder = ConversationRecordingResponder(replies: [grounded, "Follow-up"])
+        let store = ChatStore(responder: responder)
+
+        store.draft = "What did the team decide?"
+        await store.sendDraft()
+        store.draft = "When?"
+        await store.sendDraft()
+
+        XCTAssertEqual(store.messages[1].groundingSourceIDs, ["S1"])
+        XCTAssertEqual(responder.requests[1].conversation.last?.groundingSourceIDs, ["S1"])
+    }
+
     func testSendingConsumesOneTurnContextWithoutShowingItAsUserMessage() async {
         let safeguards = ContextSafeguards()
         safeguards.enable(.clipboard, value: "private clipboard")
@@ -39,6 +54,24 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(store.messages.first?.text, "Summarize this")
         XCTAssertTrue(responder.lastPrompt?.contains("private clipboard") == true)
         XCTAssertTrue(safeguards.visibleChips.isEmpty)
+    }
+
+    func testClipboardDerivedReplyIsNotIncludedInTheNextRequestHistory() async {
+        let safeguards = ContextSafeguards()
+        safeguards.enable(.clipboard, value: "AURORA-PRIVATE-SECRET")
+        let responder = ConversationRecordingResponder(replies: [
+            "The clipboard contains AURORA-PRIVATE-SECRET.",
+            "A fresh answer."
+        ])
+        let store = ChatStore(responder: responder, contextSafeguards: safeguards)
+
+        store.draft = "Summarize the clipboard"
+        await store.sendDraft()
+        store.draft = "What is the weather?"
+        await store.sendDraft()
+
+        XCTAssertTrue(responder.requests[0].prompt.contains("AURORA-PRIVATE-SECRET"))
+        XCTAssertFalse(responder.requests[1].conversation.contains { $0.text.contains("AURORA-PRIVATE-SECRET") })
     }
 
     func testSecondSendIsIgnoredWhileFirstResponseIsPending() async {
@@ -286,6 +319,21 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(replacementCount, 2)
     }
 
+    func testBurstStreamingCoalescesPublishedTranscriptUpdates() async {
+        let store = ChatStore(responder: CountingBurstResponder(tokenCount: 1_000))
+        var transcriptUpdateCount = 0
+        let observation = store.$messages.dropFirst().sink { _ in
+            transcriptUpdateCount += 1
+        }
+        store.draft = "Render without hanging"
+
+        await store.sendDraft()
+
+        withExtendedLifetime(observation) {}
+        XCTAssertEqual(store.messages.last?.text, String(repeating: "token ", count: 1_000))
+        XCTAssertLessThanOrEqual(transcriptUpdateCount, 8)
+    }
+
     func testInitialMessagePersistsWhileStreamingResponseIsStillOpen() async throws {
         let repository = RecordingChatSessionRepository()
         let store = ChatStore(responder: SlowStreamingResponder(), sessionRepository: repository)
@@ -317,6 +365,29 @@ private final class RecordingResponder: ChatResponder, @unchecked Sendable {
     func respond(to prompt: String) async throws -> String {
         lastPrompt = prompt
         return "Recorded"
+    }
+}
+
+private final class ConversationRecordingResponder: ChatResponder, @unchecked Sendable {
+    struct Request {
+        let prompt: String
+        let conversation: [ChatMessage]
+    }
+
+    private var replies: [String]
+    private(set) var requests: [Request] = []
+
+    init(replies: [String]) {
+        self.replies = replies
+    }
+
+    func respond(to prompt: String) async throws -> String {
+        replies.removeFirst()
+    }
+
+    func stream(to prompt: String, conversation: [ChatMessage]) -> AsyncThrowingStream<String, Error> {
+        requests.append(Request(prompt: prompt, conversation: conversation))
+        return stream(to: prompt)
     }
 }
 
@@ -412,6 +483,19 @@ private struct BurstStreamingResponder: ChatResponder {
     func stream(to prompt: String) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             for _ in 0..<32 { continuation.yield("token ") }
+            continuation.finish()
+        }
+    }
+}
+
+private struct CountingBurstResponder: ChatResponder {
+    let tokenCount: Int
+
+    func respond(to prompt: String) async throws -> String { "" }
+
+    func stream(to prompt: String) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            for _ in 0..<tokenCount { continuation.yield("token ") }
             continuation.finish()
         }
     }

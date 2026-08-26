@@ -3,6 +3,8 @@ import Foundation
 
 @MainActor
 final class ChatStore: ObservableObject {
+    private static let streamedRenderInterval: Duration = .milliseconds(33)
+
     @Published private(set) var messages: [ChatMessage] = []
     @Published private(set) var openSessions: [ChatSession]
     @Published private(set) var archivedSessions: [ChatSession] = []
@@ -26,6 +28,8 @@ final class ChatStore: ObservableObject {
     private var watchdogResponseID: UUID?
     private var immediatePersistenceTask: Task<Void, Never>?
     private var deferredPersistenceTask: Task<Void, Never>?
+    private var ephemeralContextResponseMessageIDs: Set<UUID> = []
+    private var activeResponseUsesEphemeralContext = false
 
     init(
         responder: any ChatResponder = LocalMockChatResponder(),
@@ -56,14 +60,16 @@ final class ChatStore: ObservableObject {
         if currentTitle == "Untitled" {
             currentTitle = ChatTitleGenerator.title(for: prompt)
         }
-        let conversation = messages
+        let conversation = messages.filter { !ephemeralContextResponseMessageIDs.contains($0.id) }
         let context = contextSafeguards?.promptContext(for: prompt) ?? ""
+        let usesEphemeralContext = contextSafeguards?.visibleChips.contains { $0.kind.expiresAfterRequest } ?? false
         let requestPrompt = context.isEmpty ? prompt : "\(prompt)\n\n[User opted-in local context — use only when relevant]\n\(context)"
         messages.append(ChatMessage(role: .user, text: prompt))
         synchronizeCurrentSession()
         let responseID = UUID()
         activeResponseID = responseID
         activeAssistantMessageID = nil
+        activeResponseUsesEphemeralContext = usesEphemeralContext
         isSending = true
         contextSafeguards?.consumeOneTurnAttachments()
         armResponseWatchdog(for: responseID)
@@ -73,35 +79,45 @@ final class ChatStore: ObservableObject {
 
         var streamedText = ""
         var streamedMessageID: UUID?
+        var lastRenderedAt: ContinuousClock.Instant?
         do {
             for try await token in responder.stream(to: requestPrompt, conversation: conversation) {
                 guard activeResponseID == responseID else { return }
                 try Task.checkCancellation()
                 streamedText.append(token)
-                if let streamedMessageID, let index = messages.firstIndex(where: { $0.id == streamedMessageID }) {
-                    let message = messages[index]
-                    messages[index] = ChatMessage(id: message.id, role: .assistant, text: streamedText, createdAt: message.createdAt)
-                } else {
-                    let message = ChatMessage(role: .assistant, text: streamedText)
-                    streamedMessageID = message.id
-                    activeAssistantMessageID = message.id
-                    messages.append(message)
+                let now = ContinuousClock.now
+                if lastRenderedAt.map({ $0.duration(to: now) >= Self.streamedRenderInterval }) ?? true {
+                    streamedMessageID = renderStreamedAssistant(
+                        streamedText,
+                        messageID: streamedMessageID
+                    )
+                    lastRenderedAt = now
                 }
                 armResponseWatchdog(for: responseID)
-                synchronizeCurrentSession(persisting: false)
             }
+            if activeResponseID == responseID,
+               !streamedText.isEmpty,
+               streamedMessageID.flatMap({ id in messages.first(where: { $0.id == id })?.text }) != streamedText {
+                streamedMessageID = renderStreamedAssistant(
+                    streamedText,
+                    messageID: streamedMessageID
+                )
+            }
+            attachGroundingMetadata(to: streamedMessageID)
         } catch is CancellationError {
             // Preserve already-streamed text; cancellation is an expected local action.
         } catch let error as OllamaClientError where error == .cancelled {
             // Preserve already-streamed text; cancellation is an expected local action.
         } catch {
             if activeResponseID == responseID, streamedText.isEmpty {
-                messages.append(
-                    ChatMessage(
-                        role: .assistant,
-                        text: "I couldn't complete that local response. Check Ollama in Settings, then try again."
-                    )
+                let message = ChatMessage(
+                    role: .assistant,
+                    text: "I couldn't complete that local response. Check Ollama in Settings, then try again."
                 )
+                if activeResponseUsesEphemeralContext {
+                    ephemeralContextResponseMessageIDs.insert(message.id)
+                }
+                messages.append(message)
             }
         }
     }
@@ -125,6 +141,7 @@ final class ChatStore: ObservableObject {
         sendingTaskID = nil
         activeResponseID = nil
         activeAssistantMessageID = nil
+        activeResponseUsesEphemeralContext = false
         responseWatchdogTask?.cancel()
         responseWatchdogTask = nil
         watchdogResponseID = nil
@@ -135,13 +152,16 @@ final class ChatStore: ObservableObject {
     func clear() {
         cancelSending()
         messages.removeAll()
+        ephemeralContextResponseMessageIDs.removeAll()
         draft = ""
         synchronizeCurrentSession()
     }
 
     func retryLastResponse() {
         guard !isSending, let userIndex = messages.lastIndex(where: { $0.role == .user }) else { return }
+        let removedMessageIDs = messages[(userIndex + 1)..<messages.count].map(\.id)
         messages.removeSubrange((userIndex + 1)..<messages.count)
+        ephemeralContextResponseMessageIDs.subtract(removedMessageIDs)
         draft = messages[userIndex].text
         synchronizeCurrentSession()
         startSendingDraft()
@@ -346,14 +366,20 @@ final class ChatStore: ObservableObject {
                 id: message.id,
                 role: .assistant,
                 text: message.text + "\n\n" + timeoutMessage,
-                createdAt: message.createdAt
+                createdAt: message.createdAt,
+                groundingSourceIDs: message.groundingSourceIDs
             )
         } else {
-            messages.append(ChatMessage(role: .assistant, text: timeoutMessage))
+            let message = ChatMessage(role: .assistant, text: timeoutMessage)
+            if activeResponseUsesEphemeralContext {
+                ephemeralContextResponseMessageIDs.insert(message.id)
+            }
+            messages.append(message)
         }
 
         activeResponseID = nil
         activeAssistantMessageID = nil
+        activeResponseUsesEphemeralContext = false
         isSending = false
         sendingTask?.cancel()
         sendingTask = nil
@@ -370,6 +396,7 @@ final class ChatStore: ObservableObject {
         guard activeResponseID == responseID else { return }
         activeResponseID = nil
         activeAssistantMessageID = nil
+        activeResponseUsesEphemeralContext = false
         isSending = false
         if watchdogResponseID == responseID {
             responseWatchdogTask?.cancel()
@@ -377,6 +404,51 @@ final class ChatStore: ObservableObject {
             watchdogResponseID = nil
         }
         synchronizeCurrentSession()
+    }
+
+    private func attachGroundingMetadata(to messageID: UUID?) {
+        guard let messageID,
+              let index = messages.firstIndex(where: { $0.id == messageID })
+        else { return }
+
+        let message = messages[index]
+        var seen = Set<String>()
+        let sourceIDs = ChatCitationCard.parse(from: message.text)
+            .map(\.citationID)
+            .filter { seen.insert($0).inserted }
+        messages[index] = ChatMessage(
+            id: message.id,
+            role: message.role,
+            text: message.text,
+            createdAt: message.createdAt,
+            groundingSourceIDs: sourceIDs
+        )
+    }
+
+    @discardableResult
+    private func renderStreamedAssistant(_ text: String, messageID: UUID?) -> UUID {
+        if let messageID,
+           let index = messages.firstIndex(where: { $0.id == messageID }) {
+            let message = messages[index]
+            messages[index] = ChatMessage(
+                id: message.id,
+                role: .assistant,
+                text: text,
+                createdAt: message.createdAt,
+                groundingSourceIDs: message.groundingSourceIDs
+            )
+            synchronizeCurrentSession(persisting: false)
+            return messageID
+        }
+
+        let message = ChatMessage(role: .assistant, text: text)
+        activeAssistantMessageID = message.id
+        if activeResponseUsesEphemeralContext {
+            ephemeralContextResponseMessageIDs.insert(message.id)
+        }
+        messages.append(message)
+        synchronizeCurrentSession(persisting: false)
+        return message.id
     }
 
     private func persistSessions(debounced: Bool = false) {

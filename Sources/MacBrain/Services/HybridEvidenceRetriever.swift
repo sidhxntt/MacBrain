@@ -2,11 +2,11 @@ import Foundation
 
 actor HybridEvidenceRetriever {
     private let database: MacBrainDatabase
-    private let provider: any InferenceProvider
+    private let provider: (any InferenceProvider)?
     private let embeddingModel: String
     private let configuration: RetrievalConfiguration
 
-    init(database: MacBrainDatabase, provider: any InferenceProvider, embeddingModel: String, configuration: RetrievalConfiguration = .init()) {
+    init(database: MacBrainDatabase, provider: (any InferenceProvider)? = nil, embeddingModel: String = "", configuration: RetrievalConfiguration = .init()) {
         self.database = database
         self.provider = provider
         self.embeddingModel = embeddingModel
@@ -17,9 +17,10 @@ actor HybridEvidenceRetriever {
         let normalized = query.normalizedRetrievalQuery
         guard !normalized.isEmpty else { return .empty }
         let candidateLimit = max(limit, configuration.candidateLimit)
-        let lexical = try await database.searchChunks(matching: normalized, limit: candidateLimit)
+        let lexical = try await database.searchChunks(matching: normalized, limit: candidateLimit, matchAllTerms: false)
         let semantic: [StoredChunk]
         do {
+            guard let provider else { throw LexicalOnlySearchError() }
             let embeddings = try await provider.embeddings(model: embeddingModel, input: [normalized])
             semantic = try await database.nearestChunks(to: embeddings.first?.values ?? [], limit: candidateLimit)
         } catch {
@@ -31,6 +32,23 @@ actor HybridEvidenceRetriever {
         try await add(semantic, rankWeight: 0.40, to: &candidates)
         let graph = try await database.graphRelatedChunks(to: Array(candidates.keys), limit: min(4, candidateLimit))
         try await add(graph, rankWeight: 0.15, to: &candidates)
+        return makeResult(from: candidates, limit: limit)
+    }
+
+    /// Exact token retrieval used as the activation gate for ambiguous local
+    /// questions. This path intentionally performs no embedding request and no
+    /// graph expansion.
+    func searchLexical(_ query: String, limit: Int = 6) async throws -> EvidenceSearchResult {
+        let normalized = query.normalizedRetrievalQuery
+        guard !normalized.isEmpty else { return .empty }
+        let candidateLimit = max(limit, configuration.candidateLimit)
+        let lexical = try await database.searchChunks(matching: normalized, limit: candidateLimit, matchAllTerms: false)
+        var candidates = [UUID: Candidate]()
+        try await add(lexical, rankWeight: 1, to: &candidates)
+        return makeResult(from: candidates, limit: limit)
+    }
+
+    private func makeResult(from candidates: [UUID: Candidate], limit: Int) -> EvidenceSearchResult {
         let selected = candidates.values
             .sorted { $0.score == $1.score ? $0.chunk.startOffset < $1.chunk.startOffset : $0.score > $1.score }
             .reduce(into: [Candidate]()) { selected, candidate in
@@ -72,6 +90,8 @@ actor HybridEvidenceRetriever {
         }
     }
 }
+
+private struct LexicalOnlySearchError: Error {}
 
 private struct Candidate: Sendable {
     let chunk: StoredChunk

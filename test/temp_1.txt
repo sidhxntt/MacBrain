@@ -1,0 +1,6 @@
+Aurora architecture note
+
+Aurora stores its local searchable evidence in SQLite FTS5. The embedding model
+is nomic-embed-text. The chat model is qwen3:8b.
+
+The project must not send document content to a hosted AI API.

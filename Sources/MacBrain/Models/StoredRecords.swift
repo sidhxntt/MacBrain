@@ -138,13 +138,22 @@ struct StoredMessage: Codable, Equatable, Identifiable, Sendable {
     var role: StoredMessageRole
     var text: String
     var createdAt: Date
+    var groundingSourceIDs: [String]
 
-    init(id: UUID = UUID(), conversationID: UUID, role: StoredMessageRole, text: String, createdAt: Date = .now) {
+    init(
+        id: UUID = UUID(),
+        conversationID: UUID,
+        role: StoredMessageRole,
+        text: String,
+        createdAt: Date = .now,
+        groundingSourceIDs: [String] = []
+    ) {
         self.id = id
         self.conversationID = conversationID
         self.role = role
         self.text = text
         self.createdAt = createdAt
+        self.groundingSourceIDs = groundingSourceIDs
     }
 }
 

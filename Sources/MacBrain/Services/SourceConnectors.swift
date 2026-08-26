@@ -32,25 +32,34 @@ protocol AppleScriptExecuting: Sendable {
 }
 
 actor AppleScriptExecutor: AppleScriptExecuting {
-    func execute(_ source: String) throws -> String {
-        var error: NSDictionary?
-        guard let script = NSAppleScript(source: source) else {
-            throw ConnectorError.failed("MacBrain could not prepare the local Automation request.")
-        }
-        let result = script.executeAndReturnError(&error)
-        if error != nil {
-            let details =
-                error?[NSAppleScript.errorMessage] as? String ?? "macOS Automation request failed."
-            if details.localizedCaseInsensitiveContains("not authorized")
-                || details.localizedCaseInsensitiveContains("not permitted")
-            {
-                throw ConnectorError.permissionDenied(
-                    "MacBrain needs Automation permission to read this source. Open System Settings and allow access, then reauthorize."
-                )
+    func execute(_ source: String) async throws -> String {
+        try await MainActor.run {
+            var error: NSDictionary?
+            guard let script = NSAppleScript(source: source) else {
+                throw ConnectorError.failed("MacBrain could not prepare the local Automation request.")
             }
-            throw ConnectorError.failed(details)
+            let result = script.executeAndReturnError(&error)
+            if error != nil {
+                let details =
+                    error?[NSAppleScript.errorMessage] as? String ?? "macOS Automation request failed."
+                let errorNumber = error?[NSAppleScript.errorNumber] as? Int
+                throw Self.connectorError(message: details, errorNumber: errorNumber)
+            }
+            return result.stringValue ?? ""
         }
-        return result.stringValue ?? ""
+    }
+
+    nonisolated static func connectorError(message: String, errorNumber: Int?) -> ConnectorError {
+        if errorNumber == -1743
+            || message == "macOS Automation request failed."
+            || message.localizedCaseInsensitiveContains("not authorized")
+            || message.localizedCaseInsensitiveContains("not permitted")
+        {
+            return .permissionDenied(
+                "MacBrain needs Automation permission to read this source. Open System Settings and allow access, then reauthorize."
+            )
+        }
+        return .failed(message)
     }
 }
 
@@ -98,7 +107,9 @@ struct AppleNotesConnector: SourceConnector {
 struct AppleMailConnector: BatchedSourceConnector {
     let kind: SourceConnectorKind = .appleMail
     let scriptExecutor: any AppleScriptExecuting
-    private let batchSize = 250
+    // Mail serializes body retrieval through Apple events; larger batches can
+    // exceed its response window and return an empty result without an error.
+    private let batchSize = 10
 
     init(scriptExecutor: any AppleScriptExecuting = AppleScriptExecutor()) {
         self.scriptExecutor = scriptExecutor
@@ -112,7 +123,12 @@ struct AppleMailConnector: BatchedSourceConnector {
         let selectedAccount = record.configuration.accountName?.trimmedNonEmpty ?? ""
         let selectedMailbox = record.configuration.containerName?.trimmedNonEmpty ?? ""
         let offset = record.configuration.syncOffset ?? 0
-        let useIncrementalCutoff = record.configuration.initialSyncCompleted && record.lastSuccessfulSync != nil
+        // Older versions could save an empty Mail result as a completed initial
+        // sync. A zero-document source must retry its history once instead of
+        // becoming permanently incremental-only.
+        let retryEmptyHistory = record.configuration.initialSyncCompleted && record.documentCount == 0
+        let useIncrementalCutoff =
+            record.configuration.initialSyncCompleted && record.lastSuccessfulSync != nil && !retryEmptyHistory
         let secondsSinceLastSync = useIncrementalCutoff
             ? max(0, Int(Date().timeIntervalSince(record.lastSuccessfulSync ?? .now) - 60))
             : 0
@@ -123,6 +139,7 @@ struct AppleMailConnector: BatchedSourceConnector {
                 set AppleScript's text item delimiters to " "
                 return valueText as text
             end scrub
+            with timeout of 60 seconds
             tell application "Mail"
                 set outputRows to {}
                 set batchOffset to \(offset)
@@ -140,30 +157,39 @@ struct AppleMailConnector: BatchedSourceConnector {
                         repeat with sourceMailbox in every mailbox of sourceAccount
                             if processedMessages < maximumMessages then
                             if "\(selectedMailbox.appleScriptLiteral)" is "" or (name of sourceMailbox as text) is "\(selectedMailbox.appleScriptLiteral)" then
-                                repeat with sourceMessage in every message of sourceMailbox
-                                    if processedMessages < maximumMessages then
-                                        set shouldInclude to true
-                                        if shouldUseCutoff then
-                                            set messageDate to date sent of sourceMessage
-                                            if messageDate is less than or equal to cutoffDate then
-                                                set shouldInclude to false
-                                            end if
-                                        end if
-                                        if shouldInclude then
-                                            if skippedMessages < batchOffset then
-                                                set skippedMessages to skippedMessages + 1
-                                            else
-                                                set recipientText to ""
-                                                try
-                                                    set recipientText to address of every to recipient of sourceMessage as text
-                                                end try
-                                                set rowText to (id of sourceMessage as text) & character id 30 & my scrub(subject of sourceMessage as text) & character id 30 & my scrub(sender of sourceMessage as text) & character id 30 & my scrub(recipientText) & character id 30 & my scrub(content of sourceMessage as text) & character id 30 & (date sent of sourceMessage as text) & character id 30 & (message id of sourceMessage as text) & character id 30 & (name of sourceAccount as text) & character id 30 & (name of sourceMailbox as text)
-                                                set end of outputRows to rowText
-                                                set processedMessages to processedMessages + 1
-                                            end if
-                                        end if
+                                if shouldUseCutoff then
+                                    set candidateMessages to (messages of sourceMailbox whose date sent is greater than cutoffDate)
+                                else
+                                    set candidateMessages to messages of sourceMailbox
+                                end if
+                                set candidateCount to count of candidateMessages
+                                set startIndex to 1
+                                if skippedMessages < batchOffset then
+                                    set remainingToSkip to batchOffset - skippedMessages
+                                    if candidateCount <= remainingToSkip then
+                                        set skippedMessages to skippedMessages + candidateCount
+                                    else
+                                        set startIndex to remainingToSkip + 1
+                                        set skippedMessages to batchOffset
                                     end if
-                                end repeat
+                                else
+                                    set startIndex to 1
+                                end if
+                                if processedMessages < maximumMessages and candidateCount >= startIndex then
+                                    set remainingSlots to maximumMessages - processedMessages
+                                    set endIndex to startIndex + remainingSlots - 1
+                                    if endIndex > candidateCount then set endIndex to candidateCount
+                                    set selectedMessages to items startIndex thru endIndex of candidateMessages
+                                    repeat with sourceMessage in selectedMessages
+                                        set recipientText to ""
+                                        try
+                                            set recipientText to address of every to recipient of sourceMessage as text
+                                        end try
+                                        set rowText to (id of sourceMessage as text) & character id 30 & my scrub(subject of sourceMessage as text) & character id 30 & my scrub(sender of sourceMessage as text) & character id 30 & my scrub(recipientText) & character id 30 & my scrub(content of sourceMessage as text) & character id 30 & (date sent of sourceMessage as text) & character id 30 & (message id of sourceMessage as text) & character id 30 & (name of sourceAccount as text) & character id 30 & (name of sourceMailbox as text)
+                                        set end of outputRows to rowText
+                                        set processedMessages to processedMessages + 1
+                                    end repeat
+                                end if
                             end if
                             end if
                         end repeat
@@ -173,16 +199,19 @@ struct AppleMailConnector: BatchedSourceConnector {
                 set AppleScript's text item delimiters to character id 29
                 return outputRows as text
             end tell
+            end timeout
             """
         let output = try await scriptExecutor.execute(script)
         let documents = try ConnectorRowParser.mail(output, record: record)
         let hasMore = documents.count == batchSize
         let nextOffset = hasMore ? offset + documents.count : nil
-        let phase = record.configuration.initialSyncCompleted ? "new mail" : "mail history"
+        let phase = useIncrementalCutoff ? "new mail" : "mail history"
         return ConnectorSyncBatch(
             documents: documents,
             nextOffset: nextOffset,
-            initialSyncCompleted: record.configuration.initialSyncCompleted || !hasMore,
+            // A transient empty AppleScript result must not lock a source into
+            // incremental-only mode; retry its history on the next sync instead.
+            initialSyncCompleted: useIncrementalCutoff || (!documents.isEmpty && !hasMore),
             progressDescription: "Indexed \(documents.count) \(phase) · \(offset + documents.count) total"
         )
     }
@@ -221,9 +250,15 @@ protocol GitRunning: Sendable {
 }
 
 actor GitRunner: GitRunning {
+    private let executableURL: URL
+
+    init(executableURL: URL = URL(fileURLWithPath: "/usr/bin/git")) {
+        self.executableURL = executableURL
+    }
+
     func run(arguments: [String], at repositoryURL: URL) throws -> String {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.executableURL = executableURL
         process.arguments = arguments
         process.currentDirectoryURL = repositoryURL
         let standardOutput = Pipe()
@@ -232,12 +267,15 @@ actor GitRunner: GitRunning {
         process.standardError = standardError
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
             throw ConnectorError.sourceUnavailable("Git is unavailable on this Mac.")
         }
+
+        // `git log` can exceed a pipe buffer in an active repository. Drain it
+        // before waiting, otherwise Git and the connector can wait on each other.
         let output = String(
             decoding: standardOutput.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             let error = String(
                 decoding: standardError.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
@@ -296,7 +334,7 @@ struct GitRepositoryConnector: FileBackedSourceConnector {
             metadata["repository"] = record.displayName
             return ConnectorDocument(
                 connectorID: document.connectorID,
-                externalID: "git-file:\(document.externalID)",
+                externalID: gitExternalID(document.externalID),
                 title: document.title,
                 text: document.text,
                 sourceLabel: document.sourceLabel,
@@ -312,16 +350,20 @@ struct GitRepositoryConnector: FileBackedSourceConnector {
                 FileFingerprint(
                     byteCount: value.byteCount,
                     modifiedAt: value.modifiedAt,
-                    documentExternalIDs: value.documentExternalIDs.map { "git-file:\($0)" }
+                    documentExternalIDs: value.documentExternalIDs.map(gitExternalID)
                 )
             )
         })
         return FileBackedSyncResult(
             changedDocuments: files + commits,
-            presentExternalIDs: fileScan.presentExternalIDs.map { "git-file:\($0)" } + commits.map(\.externalID),
+            presentExternalIDs: fileScan.presentExternalIDs.map(gitExternalID) + commits.map(\.externalID),
             fingerprints: fingerprints
         )
     }
+}
+
+private func gitExternalID(_ externalID: String) -> String {
+    externalID.hasPrefix("git-file:") ? externalID : "git-file:\(externalID)"
 }
 
 private enum ConnectorRowParser {

@@ -26,7 +26,22 @@ struct LocalFileReadTool: Sendable {
         let truncationNotice = content.count > visibleContent.count
             ? "\n\n_Only the first \(Self.maximumResponseCharacters.formatted()) characters are shown._"
             : ""
-        return "## \(displayPath)\n\n\(visibleContent)\(truncationNotice)"
+        let sourcePath = document.metadata["path"] ?? document.externalID
+        let source = RetrievalEvidence(
+            citationID: "S1",
+            chunkID: UUID(),
+            sourceTitle: document.title,
+            sourceType: record.kind.rawValue,
+            sourcePath: sourcePath,
+            sourceDate: document.modifiedAt ?? document.createdAt,
+            excerpt: visibleContent,
+            startOffset: 0,
+            endOffset: visibleContent.utf16.count,
+            pageNumber: nil,
+            score: 1
+        )
+        let sources = CitationValidator.renderedSources(for: [source])
+        return "## \(displayPath)\n\n\(visibleContent)\(truncationNotice)\n\n\(sources)"
     }
 
     private func readCurrentContent(of document: ConnectorDocument, in record: ConnectorRecord) throws -> String {

@@ -90,6 +90,33 @@ final class SourceConnectorTests: XCTestCase {
         XCTAssertEqual(secondJobs.count, 2)
     }
 
+    func testSnapshotConnectorQueuesOnlyNewOrChangedChunksForIndexing() async throws {
+        let database = try MacBrainDatabase(url: try temporaryStoreURL())
+        let repository = LocalSourceRepository(fileURL: try temporaryStoreURL(), database: database)
+        let jobs = IndexingJobCoordinator(database: database)
+        let connector = SnapshotConnector(kind: .calendar)
+        let coordinator = LocalSourceCoordinator(repository: repository, indexingJobs: jobs, connectors: [connector])
+        let record = try await coordinator.create(kind: .calendar, displayName: "Apple Calendar", configuration: .init())
+        await connector.setDocuments([
+            ConnectorDocument(connectorID: record.id, externalID: "event-1", title: "One", text: "Initial event", sourceLabel: "Calendar")
+        ])
+
+        _ = try await coordinator.sync(id: record.id)
+        let initialJobs = try await database.indexingJobs(sourceID: record.id)
+        XCTAssertEqual(initialJobs.count, 2)
+
+        _ = try await coordinator.sync(id: record.id)
+        let unchangedJobs = try await database.indexingJobs(sourceID: record.id)
+        XCTAssertEqual(unchangedJobs.count, 2)
+
+        await connector.setDocuments([
+            ConnectorDocument(connectorID: record.id, externalID: "event-1", title: "One", text: "Updated event", sourceLabel: "Calendar")
+        ])
+        _ = try await coordinator.sync(id: record.id)
+        let changedJobs = try await database.indexingJobs(sourceID: record.id)
+        XCTAssertEqual(changedJobs.count, 4)
+    }
+
     func testFolderIndexesHiddenAndSecretFilesWhileSkippingDependencyAndBuildDirectories() async throws {
         let directory = try makeTemporaryDirectory()
         try FileManager.default.createDirectory(
@@ -194,6 +221,30 @@ final class SourceConnectorTests: XCTestCase {
 
         let syncCount = await connector.syncCount()
         XCTAssertEqual(syncCount, 0)
+    }
+
+    @MainActor
+    func testAutomaticRefreshRetriesFailedSourceWhenItIsDue() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryStoreURL())
+        let connector = CountingConnector(kind: .photos)
+        let coordinator = LocalSourceCoordinator(repository: repository, connectors: [connector])
+        var record = ConnectorRecord(
+            kind: .photos,
+            displayName: "Photos metadata",
+            configuration: .init(),
+            lastSuccessfulSync: .now.addingTimeInterval(-301)
+        )
+        record.status = .failed
+        record.lastError = "database is locked"
+        try await repository.save(record)
+        let store = SourceLibraryStore(repository: repository, coordinator: coordinator)
+
+        await store.refreshConnectedSourcesIfDue()
+
+        let syncCount = await connector.syncCount()
+        let savedRecord = await repository.record(id: record.id)
+        XCTAssertEqual(syncCount, 1)
+        XCTAssertEqual(savedRecord?.status, .ready)
     }
 
     func testSourceConfigurationDecodesLegacyDataWithoutBatchFields() throws {
@@ -332,6 +383,53 @@ final class SourceConnectorTests: XCTestCase {
     }
 
     @MainActor
+    func testAutomaticRefreshFansOutEveryConnectorKindInParallel() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryStoreURL())
+        let probe = ConcurrentSyncProbe()
+        let coordinator = LocalSourceCoordinator(
+            repository: repository,
+            connectors: SourceConnectorKind.allCases.map { ConcurrentProbeConnector(kind: $0, probe: probe) }
+        )
+        var records: [ConnectorRecord] = []
+        for kind in SourceConnectorKind.allCases {
+            records.append(try await coordinator.create(kind: kind, displayName: kind.displayName, configuration: .init()))
+        }
+        let store = SourceLibraryStore(repository: repository, coordinator: coordinator)
+
+        await store.refreshConnectedSourcesIfDue()
+
+        let maximumConcurrency = await probe.maximumConcurrency()
+        XCTAssertGreaterThan(maximumConcurrency, 1)
+        for record in records {
+            XCTAssertFalse(store.isSyncing(record))
+            let savedRecord = await repository.record(id: record.id)
+            XCTAssertEqual(savedRecord?.status, .ready)
+        }
+    }
+
+    func testHungConnectorFailsAtTheConfiguredDeadline() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryStoreURL())
+        let coordinator = LocalSourceCoordinator(
+            repository: repository,
+            syncTimeout: .milliseconds(20),
+            connectors: [HangingConnector(kind: .calendar)]
+        )
+        let record = try await coordinator.create(kind: .calendar, displayName: "Apple Calendar", configuration: .init())
+
+        do {
+            _ = try await coordinator.sync(id: record.id)
+            XCTFail("Expected the sync deadline to fail")
+        } catch let error as ConnectorError {
+            XCTAssertEqual(error, .failed("The source sync timed out after 2 minutes."))
+        }
+
+        let savedRecord = await repository.record(id: record.id)
+        XCTAssertEqual(savedRecord?.status, .failed)
+        XCTAssertEqual(savedRecord?.lastError, "The source sync timed out after 2 minutes.")
+        XCTAssertNil(savedRecord?.syncProgress)
+    }
+
+    @MainActor
     func testBrowserProfilesCreatesAndSyncsEachDetectedProfileOnlyOnce() async throws {
         let home = try makeTemporaryDirectory()
         let chromeRoot = home.appendingPathComponent("Library/Application Support/Google/Chrome", isDirectory: true)
@@ -420,6 +518,52 @@ final class SourceConnectorTests: XCTestCase {
         let savedRecord = await repository.record(id: record.id)
         XCTAssertEqual(count, 0)
         XCTAssertEqual(savedRecord?.status, .paused)
+    }
+
+    @MainActor
+    func testAuthorizationRetryResumesAnAlreadyConnectedSourceAfterPermissionChanges() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryStoreURL())
+        let connector = CountingConnector(kind: .messages)
+        let coordinator = LocalSourceCoordinator(repository: repository, connectors: [connector])
+        let store = SourceLibraryStore(repository: repository, coordinator: coordinator)
+        var record = try await coordinator.create(
+            kind: .messages,
+            displayName: "Messages",
+            configuration: SourceConnectorConfiguration()
+        )
+        record.status = .needsAuthorization
+        record.lastError = "MacBrain needs Full Disk Access to read this local library."
+        try await repository.save(record)
+
+        await store.retryAuthorizationNeededSources()
+        try await Task.sleep(for: .milliseconds(80))
+
+        let savedRecord = await repository.record(id: record.id)
+        let syncCount = await connector.syncCount()
+        XCTAssertEqual(syncCount, 1)
+        XCTAssertEqual(savedRecord?.status, .ready)
+    }
+
+    @MainActor
+    func testResumeImmediatelyStartsASync() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryStoreURL())
+        let connector = CountingConnector(kind: .gitRepository)
+        let coordinator = LocalSourceCoordinator(repository: repository, connectors: [connector])
+        let store = SourceLibraryStore(repository: repository, coordinator: coordinator)
+        let record = try await coordinator.create(
+            kind: .gitRepository,
+            displayName: "Repository",
+            configuration: .init(localPath: "/tmp/repository")
+        )
+        try await coordinator.pause(id: record.id)
+
+        store.resume(record)
+        try await Task.sleep(for: .milliseconds(100))
+        let syncCount = await connector.syncCount()
+        let resumedRecord = await repository.record(id: record.id)
+
+        XCTAssertEqual(syncCount, 1)
+        XCTAssertEqual(resumedRecord?.status, .ready)
     }
 
     @MainActor
@@ -559,6 +703,59 @@ final class SourceConnectorTests: XCTestCase {
         XCTAssertEqual(document?.metadata["recipients"], "team@example.com")
         XCTAssertEqual(document?.metadata["threadID"], "<message@example.com>")
         XCTAssertEqual(document?.metadata["mailbox"], "Inbox")
+    }
+
+    func testMailInitialSyncReadsABoundedMessageRangeInsteadOfEnumeratingEveryMessage() async throws {
+        let executor = CapturingAppleScriptExecutor(output: "")
+        let connector = AppleMailConnector(scriptExecutor: executor)
+        let record = ConnectorRecord(kind: .appleMail, displayName: "Mail", configuration: .init())
+
+        _ = try await connector.syncBatch(record: record)
+
+        let script = await executor.lastScript()
+        XCTAssertTrue(script.contains("with timeout of 60 seconds"))
+        XCTAssertTrue(script.contains("set maximumMessages to 10"))
+        XCTAssertTrue(script.contains("items startIndex thru endIndex of candidateMessages"))
+        XCTAssertFalse(script.contains("every message of sourceMailbox"))
+    }
+
+    func testMailResumedHistoryInitializesItsMailboxStartIndex() async throws {
+        let executor = CapturingAppleScriptExecutor(output: "")
+        let connector = AppleMailConnector(scriptExecutor: executor)
+        var record = ConnectorRecord(kind: .appleMail, displayName: "Mail", configuration: .init())
+        record.configuration.syncOffset = 50
+
+        _ = try await connector.syncBatch(record: record)
+        let script = await executor.lastScript()
+
+        let firstStartIndex = try XCTUnwrap(script.range(of: "set startIndex"))
+        let skipBranch = try XCTUnwrap(script.range(of: "if skippedMessages < batchOffset"))
+        XCTAssertLessThan(firstStartIndex.lowerBound, skipBranch.lowerBound)
+    }
+
+    func testMailEmptyInitialBatchRemainsEligibleForHistoricalRetry() async throws {
+        let connector = AppleMailConnector(scriptExecutor: FixedAppleScriptExecutor(output: ""))
+        let record = ConnectorRecord(kind: .appleMail, displayName: "Mail", configuration: .init())
+
+        let batch = try await connector.syncBatch(record: record)
+
+        XCTAssertFalse(batch.initialSyncCompleted)
+        XCTAssertNil(batch.nextOffset)
+    }
+
+    func testMailZeroDocumentSourceRetriesHistoryAfterStaleCompletionMarker() async throws {
+        let executor = CapturingAppleScriptExecutor(output: "")
+        let connector = AppleMailConnector(scriptExecutor: executor)
+        var record = ConnectorRecord(kind: .appleMail, displayName: "Mail", configuration: .init())
+        record.configuration.initialSyncCompleted = true
+        record.lastSuccessfulSync = .now
+        record.documentCount = 0
+
+        let batch = try await connector.syncBatch(record: record)
+        let script = await executor.lastScript()
+
+        XCTAssertFalse(batch.initialSyncCompleted)
+        XCTAssertTrue(script.contains("set shouldUseCutoff to false"))
     }
 
     func testGitConnectorIncludesBranchesFilesAuthorAndReferences() async throws {
@@ -763,6 +960,30 @@ final class SourceConnectorTests: XCTestCase {
         XCTAssertEqual(documents[0].metadata["senderOrHandle"], "person@example.com")
     }
 
+    func testMessagesConnectorReportsPermissionNeededBeforeReadingAnUnreadableDatabase() async throws {
+        let directory = try makeTemporaryDirectory()
+        let databaseURL = directory.appendingPathComponent("chat.db")
+        try Data().write(to: databaseURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: databaseURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: databaseURL.path) }
+
+        let connector = MessagesConnector(
+            reader: FixedSQLiteReader(output: "unexpected read"),
+            databaseURL: databaseURL
+        )
+        let record = ConnectorRecord(kind: .messages, displayName: "Messages", configuration: .init())
+
+        do {
+            _ = try await connector.syncBatch(record: record)
+            XCTFail("Expected a Full Disk Access error")
+        } catch let error as ConnectorError {
+            XCTAssertEqual(
+                error,
+                .permissionDenied("MacBrain needs Full Disk Access to read Messages. Enable it in System Settings, then retry this source.")
+            )
+        }
+    }
+
     func testMessagesInitialSyncUsesABoundedQuery() async throws {
         let directory = try makeTemporaryDirectory()
         let databaseURL = directory.appendingPathComponent("chat.db")
@@ -774,7 +995,202 @@ final class SourceConnectorTests: XCTestCase {
         _ = try await connector.syncBatch(record: record)
 
         let query = await reader.lastQuery()
-        XCTAssertTrue(query.contains("LIMIT 500 OFFSET 0"))
+        XCTAssertTrue(query.contains("ORDER BY m.ROWID DESC"))
+        XCTAssertTrue(query.contains("LIMIT 500"))
+        XCTAssertFalse(query.contains("OFFSET"))
+    }
+
+    func testMessagesSyncUsesRowIDCursorInsteadOfOffsetPagination() async throws {
+        let directory = try makeTemporaryDirectory()
+        let databaseURL = directory.appendingPathComponent("chat.db")
+        try Data().write(to: databaseURL)
+        let reader = CapturingSQLiteReader(output: "")
+        let connector = MessagesConnector(reader: reader, databaseURL: databaseURL)
+        let record = ConnectorRecord(
+            kind: .messages,
+            displayName: "Messages",
+            configuration: .init(syncOffset: 9_001)
+        )
+
+        _ = try await connector.syncBatch(record: record)
+
+        let query = await reader.lastQuery()
+        XCTAssertTrue(query.contains("m.ROWID < 9001"))
+        XCTAssertTrue(query.contains("ORDER BY m.ROWID DESC"))
+        XCTAssertFalse(query.contains("OFFSET"))
+    }
+
+    func testMessagesAuthorizationDeniedRequestsFullDiskAccess() {
+        XCTAssertEqual(
+            LocalSQLiteReader.connectorError(for: "Error: unable to open database: authorization denied"),
+            .permissionDenied("MacBrain needs Full Disk Access to read this local library. Enable it in System Settings, then reauthorize.")
+        )
+    }
+
+    func testAppleMailLocalStoreProbeReadsSchemaWithoutEmailRows() async throws {
+        let databaseURL = URL(fileURLWithPath: "/tmp/Envelope Index")
+        let probe = AppleMailLocalStoreProbe(
+            reader: FixedSQLiteReader(output: "messages\nmailboxes\n"),
+            databaseLocator: { databaseURL }
+        )
+
+        let result = try await probe.run()
+
+        XCTAssertEqual(result.databaseURL, databaseURL)
+        XCTAssertEqual(result.tableNames, ["messages", "mailboxes"])
+    }
+
+    func testAppleMailLocalStoreUsesRowIDCursorAndIgnoresLegacyAutomationOffset() async throws {
+        let databaseURL = try makeTemporaryDirectory().appendingPathComponent("Envelope Index")
+        try Data().write(to: databaseURL)
+        let reader = CapturingSQLiteReader(output: "900\u{1F}9\u{1F}<mail@example.com>\u{1F}Subject\u{1F}sender@example.com\u{1F}Sender\u{1F}Preview\u{1F}Inbox\u{1F}1700000000\n")
+        let connector = AppleMailLocalStoreConnector(reader: reader, databaseLocator: { databaseURL })
+        var record = ConnectorRecord(kind: .appleMail, displayName: "Apple Mail", configuration: .init(syncOffset: 50))
+        record.documentCount = 50
+
+        let batch = try await connector.syncBatch(record: record)
+        let query = await reader.lastQuery()
+
+        XCTAssertEqual(batch.documents.count, 1)
+        XCTAssertEqual(batch.documents[0].title, "Subject")
+        XCTAssertFalse(query.contains("m.ROWID < 50"))
+    }
+
+    func testAppleMailLocalStorePreservesHeadersAndBodyPreviewWithoutAttachments() async throws {
+        let databaseURL = try makeTemporaryDirectory().appendingPathComponent("Envelope Index")
+        try Data().write(to: databaseURL)
+        let reader = FixedSQLiteReader(output: "900\u{1F}9\u{1F}<mail@example.com>\u{1F}Subject\u{1F}sender@example.com\u{1F}Sender\u{1F}Body preview\u{1F}Inbox\u{1F}1700000000\n")
+        let connector = AppleMailLocalStoreConnector(reader: reader, databaseLocator: { databaseURL })
+        let record = ConnectorRecord(kind: .appleMail, displayName: "Apple Mail", configuration: .init())
+
+        let batch = try await connector.syncBatch(record: record)
+        let document = try XCTUnwrap(batch.documents.first)
+
+        XCTAssertTrue(document.text.contains("From: sender@example.com"))
+        XCTAssertTrue(document.text.contains("Body preview"))
+        XCTAssertEqual(document.metadata["sender"], "sender@example.com")
+        XCTAssertFalse(document.text.localizedCaseInsensitiveContains("attachment"))
+    }
+
+    func testReminderDocumentIncludesPriority() {
+        let document = RemindersConnector.document(
+            connectorID: UUID(),
+            identifier: "reminder-1",
+            title: "Ship test",
+            list: "Work",
+            isCompleted: false,
+            dueDate: nil,
+            completionDate: nil,
+            priority: 1,
+            notes: "Do this first"
+        )
+
+        XCTAssertTrue(document.text.contains("Priority: High"))
+        XCTAssertEqual(document.metadata["priority"], "high")
+    }
+
+    func testPhotoCollectionMembershipFormatsOnlyCollectionNames() {
+        XCTAssertEqual(PhotoCollectionMembership.format(["Trips", "Aurora QA", "Trips"]), "Aurora QA, Trips")
+        XCTAssertEqual(PhotoCollectionMembership.format([]), "No collection")
+    }
+
+    func testLocalSQLiteReaderReadsLargeBatchOutputInProcess() async throws {
+        let databaseURL = try temporaryStoreURL()
+        try Data().write(to: databaseURL)
+
+        let output = try await LocalSQLiteReader().read(
+            databaseURL: databaseURL,
+            query: "SELECT replace(hex(zeroblob(131072)), '00', 'x');"
+        )
+
+        XCTAssertEqual(output.trimmingCharacters(in: .newlines).count, 131_072)
+    }
+
+    func testGitRunnerDrainsLargeOutputBeforeWaitingForExit() async throws {
+        let directory = try makeTemporaryDirectory()
+        let scriptURL = directory.appendingPathComponent("large-output")
+        try Data("#!/bin/sh\nhead -c 131072 /dev/zero | tr '\\0' x\n".utf8).write(to: scriptURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+
+        let output = try await GitRunner(executableURL: scriptURL).run(arguments: [], at: directory)
+
+        XCTAssertEqual(output.count, 131_072)
+    }
+
+    func testAppleScriptAutomationDeniedRequestsPermissionWhenMacOSOmitsErrorText() {
+        XCTAssertEqual(
+            AppleScriptExecutor.connectorError(
+                message: "macOS Automation request failed.",
+                errorNumber: -1743
+            ),
+            .permissionDenied(
+                "MacBrain needs Automation permission to read this source. Open System Settings and allow access, then reauthorize."
+            )
+        )
+    }
+
+    func testAppleScriptGenericAutomationFailureRequestsPermissionWhenMacOSOmitsDiagnostics() {
+        XCTAssertEqual(
+            AppleScriptExecutor.connectorError(
+                message: "macOS Automation request failed.",
+                errorNumber: nil
+            ),
+            .permissionDenied(
+                "MacBrain needs Automation permission to read this source. Open System Settings and allow access, then reauthorize."
+            )
+        )
+    }
+
+    func testAppleScriptTimeoutRemainsRetryableWhenMailDoesNotRespond() {
+        XCTAssertEqual(
+            AppleScriptExecutor.connectorError(
+                message: "Mail got an error: AppleEvent timed out.",
+                errorNumber: -1712
+            ),
+            .failed("Mail got an error: AppleEvent timed out.")
+        )
+    }
+
+    func testRecoveryMigratesLegacyMailAutomationFailureToActionableAuthorizationState() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryStoreURL())
+        let coordinator = LocalSourceCoordinator(repository: repository, connectors: [EmptyConnector(kind: .appleMail)])
+        var record = ConnectorRecord(
+            kind: .appleMail,
+            displayName: "Apple Mail",
+            configuration: SourceConnectorConfiguration(),
+            status: .failed,
+            lastError: "macOS Automation request failed."
+        )
+        try await repository.save(record)
+
+        await coordinator.recoverInterruptedSyncs()
+
+        let savedRecord = await repository.record(id: record.id)
+        record = try XCTUnwrap(savedRecord)
+        XCTAssertEqual(record.status, .needsAuthorization)
+        XCTAssertEqual(
+            record.lastError,
+            "MacBrain needs Automation permission to read this source. Open System Settings and allow access, then reauthorize."
+        )
+    }
+
+    func testRecoveryMigratesTimedOutMailAutomationToActionableAuthorizationState() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryStoreURL())
+        let coordinator = LocalSourceCoordinator(repository: repository, connectors: [EmptyConnector(kind: .appleMail)])
+        var record = ConnectorRecord(
+            kind: .appleMail,
+            displayName: "Apple Mail",
+            configuration: SourceConnectorConfiguration(),
+            status: .failed,
+            lastError: "Mail got an error: AppleEvent timed out."
+        )
+        try await repository.save(record)
+
+        await coordinator.recoverInterruptedSyncs()
+
+        let savedRecord = await repository.record(id: record.id)
+        record = try XCTUnwrap(savedRecord)
+        XCTAssertEqual(record.status, .needsAuthorization)
     }
 
     func testBatchedSyncPersistsProgressAndMergesAllBatches() async throws {
@@ -877,6 +1293,22 @@ private struct FixedAppleScriptExecutor: AppleScriptExecuting {
     func execute(_ source: String) async throws -> String { output }
 }
 
+private actor CapturingAppleScriptExecutor: AppleScriptExecuting {
+    let output: String
+    private var script = ""
+
+    init(output: String) {
+        self.output = output
+    }
+
+    func execute(_ source: String) async throws -> String {
+        script = source
+        return output
+    }
+
+    func lastScript() -> String { script }
+}
+
 private struct LegacySourceSnapshot: Codable {
     let records: [ConnectorRecord]
     let documents: [ConnectorDocument]
@@ -889,6 +1321,52 @@ private struct DelayedConnector: SourceConnector {
         try await Task.sleep(for: .milliseconds(300))
         return []
     }
+}
+
+private actor ConcurrentSyncProbe {
+    private var active = 0
+    private var maximum = 0
+
+    func begin() {
+        active += 1
+        maximum = max(maximum, active)
+    }
+
+    func end() { active -= 1 }
+    func maximumConcurrency() -> Int { maximum }
+}
+
+private struct ConcurrentProbeConnector: SourceConnector {
+    let kind: SourceConnectorKind
+    let probe: ConcurrentSyncProbe
+
+    func sync(record: ConnectorRecord) async throws -> [ConnectorDocument] {
+        await probe.begin()
+        defer { Task { await probe.end() } }
+        try await Task.sleep(for: .milliseconds(100))
+        return []
+    }
+}
+
+private struct HangingConnector: SourceConnector {
+    let kind: SourceConnectorKind
+
+    func sync(record: ConnectorRecord) async throws -> [ConnectorDocument] {
+        try await Task.sleep(for: .seconds(60))
+        return []
+    }
+}
+
+private actor SnapshotConnector: SourceConnector {
+    let kind: SourceConnectorKind
+    private var documents: [ConnectorDocument] = []
+
+    init(kind: SourceConnectorKind) {
+        self.kind = kind
+    }
+
+    func setDocuments(_ documents: [ConnectorDocument]) { self.documents = documents }
+    func sync(record: ConnectorRecord) async throws -> [ConnectorDocument] { documents }
 }
 
 private actor CountingConnector: SourceConnector {

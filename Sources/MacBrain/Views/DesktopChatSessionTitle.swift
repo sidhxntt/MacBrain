@@ -29,14 +29,15 @@ struct DesktopChatSessionTitle: View {
                             title: session.title,
                             isHovering: isHovering
                         )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .simultaneousGesture(
-                        TapGesture(count: 2)
-                            .onEnded(beginEditing)
-                    )
+                    .contextMenu {
+                        Button("Rename", action: beginEditing)
+                    }
                     .accessibilityLabel("Open chat \(session.title)")
-                    .accessibilityHint("Double-click to rename")
+                    .accessibilityHint("Use the context menu to rename")
                     .accessibilityAction(named: "Rename chat", beginEditing)
 
                     hoverActions
@@ -45,7 +46,7 @@ struct DesktopChatSessionTitle: View {
                 .frame(height: 36, alignment: .center)
                 .background {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(.gray.opacity(isHovering ? 0.28 : 0))
+                        .fill(isActive ? Color.accentColor.opacity(0.24) : Color.gray.opacity(isHovering ? 0.28 : 0))
                 }
                 .onHover(perform: updateHoverState)
                 .animation(.easeInOut(duration: 0.28), value: isHovering)
@@ -83,6 +84,10 @@ struct DesktopChatSessionTitle: View {
         .opacity(isHovering ? 1 : 0)
         .allowsHitTesting(isHovering)
         .accessibilityHidden(!isHovering)
+    }
+
+    private var isActive: Bool {
+        session.id == chatStore.activeSessionID
     }
 
     private func openChat() {

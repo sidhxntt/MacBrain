@@ -11,6 +11,8 @@ final class SourceLibraryStore: ObservableObject {
     @Published private var syncingRecordIDs = Set<UUID>()
     @Published private var syncingKinds = Set<SourceConnectorKind>()
     private var automaticRefreshTask: Task<Void, Never>?
+    private var indexingProvider: (any InferenceProvider)?
+    private var selectedEmbeddingModel: (() -> String)?
 
     let repository: LocalSourceRepository
     private let coordinator: LocalSourceCoordinator
@@ -19,10 +21,11 @@ final class SourceLibraryStore: ObservableObject {
     init(
         repository: LocalSourceRepository = LocalSourceRepository(),
         coordinator: LocalSourceCoordinator? = nil,
-        browserProfileCatalog: BrowserProfileCatalog = BrowserProfileCatalog()
+        browserProfileCatalog: BrowserProfileCatalog = BrowserProfileCatalog(),
+        database: MacBrainDatabase? = nil
     ) {
         self.repository = repository
-        let jobs = try? MacBrainDatabase()
+        let jobs = database ?? (try? MacBrainDatabase())
         self.coordinator = coordinator ?? LocalSourceCoordinator(
             repository: repository,
             indexingJobs: jobs.map(IndexingJobCoordinator.init)
@@ -42,6 +45,14 @@ final class SourceLibraryStore: ObservableObject {
         await coordinator.processQueuedIndexing(using: provider, embeddingModel: embeddingModel)
     }
 
+    func configureAutomaticIndexing(
+        using provider: any InferenceProvider,
+        selectedEmbeddingModel: @escaping () -> String
+    ) {
+        indexingProvider = provider
+        self.selectedEmbeddingModel = selectedEmbeddingModel
+    }
+
     func startAutomaticRefresh() {
         automaticRefreshTask?.cancel()
         nextAutomaticRefresh = .now.addingTimeInterval(300)
@@ -49,7 +60,7 @@ final class SourceLibraryStore: ObservableObject {
             guard let self else { return }
             await self.coordinator.recoverInterruptedSyncs()
             await self.reload()
-            await self.refreshConnectedSourcesIfDue()
+            await self.retryAuthorizationNeededSources()
 
             while !Task.isCancelled {
                 self.nextAutomaticRefresh = .now.addingTimeInterval(300)
@@ -72,25 +83,30 @@ final class SourceLibraryStore: ObservableObject {
 
     func refreshConnectedSourcesNow() async {
         await reload()
-        let candidates = records.filter { $0.status == .ready && !syncingRecordIDs.contains($0.id) }
-        for record in candidates {
-            guard !Task.isCancelled else { return }
-            await refreshAutomatically(record)
+        let candidates = records.filter {
+            ($0.status == .ready || $0.status == .failed) && !syncingRecordIDs.contains($0.id)
         }
+        await refresh(candidates)
     }
 
     func refreshConnectedSourcesIfDue(referenceDate: Date = .now) async {
         await reload()
         let refreshInterval = Self.automaticRefreshInterval.components.seconds
         let candidates = records.filter { record in
-            guard record.status == .ready, !syncingRecordIDs.contains(record.id) else { return false }
+            guard (record.status == .ready || record.status == .failed), !syncingRecordIDs.contains(record.id) else { return false }
             guard let lastSuccessfulSync = record.lastSuccessfulSync else { return true }
             return referenceDate.timeIntervalSince(lastSuccessfulSync) >= Double(refreshInterval)
         }
-        for record in candidates {
-            guard !Task.isCancelled else { return }
-            await refreshAutomatically(record)
-        }
+        await refresh(candidates)
+    }
+
+    /// A source can retain the permission-needed status after the user changes a
+    /// macOS privacy setting. Retry those explicitly connected sources once at
+    /// startup so the new grant takes effect without requiring a manual menu action.
+    func retryAuthorizationNeededSources() async {
+        await reload()
+        let candidates = records.filter { $0.status == .needsAuthorization && !syncingRecordIDs.contains($0.id) }
+        await refresh(candidates)
     }
 
     func isSyncing(kind: SourceConnectorKind) -> Bool {
@@ -166,6 +182,7 @@ final class SourceLibraryStore: ObservableObject {
 
         Task {
             await self.reload()
+            var recordsToSync: [ConnectorRecord] = []
             for profile in profiles {
                 guard let browser = profile.browserKind else { continue }
                 let existing = self.records.first {
@@ -175,7 +192,7 @@ final class SourceLibraryStore: ObservableObject {
                 }
 
                 if let existing {
-                    await self.syncBrowserProfile(existing)
+                    recordsToSync.append(existing)
                     continue
                 }
 
@@ -191,11 +208,12 @@ final class SourceLibraryStore: ObservableObject {
                         )
                     )
                     await self.reload()
-                    await self.syncBrowserProfile(record)
+                    recordsToSync.append(record)
                 } catch {
                     self.alertMessage = error.localizedDescription
                 }
             }
+            await self.syncBrowserProfiles(recordsToSync)
             self.syncingKinds.remove(kind)
             await self.reload()
         }
@@ -217,7 +235,10 @@ final class SourceLibraryStore: ObservableObject {
     }
 
     func resume(_ record: ConnectorRecord) {
-        perform(for: record.id) { try await self.coordinator.resume(id: record.id) }
+        perform(for: record.id) {
+            try await self.coordinator.resume(id: record.id)
+            _ = try await self.coordinator.sync(id: record.id)
+        }
     }
 
     func delete(_ record: ConnectorRecord) {
@@ -280,6 +301,7 @@ final class SourceLibraryStore: ObservableObject {
 
         do {
             let refreshed = try await coordinator.sync(id: record.id)
+            await processIndexingIfConfigured()
             let count = "\(refreshed.documentCount) \(refreshed.documentCount == 1 ? "item" : "items")"
             appendActivity(for: refreshed, state: .completed, detail: "Initial browser sync complete · \(count)")
         } catch {
@@ -290,15 +312,27 @@ final class SourceLibraryStore: ObservableObject {
         }
     }
 
+    private func syncBrowserProfiles(_ records: [ConnectorRecord]) async {
+        await withTaskGroup(of: Void.self) { group in
+            for record in records {
+                group.addTask { [weak self, record] in
+                    guard let self else { return }
+                    await self.syncBrowserProfile(record)
+                }
+            }
+            await group.waitForAll()
+        }
+    }
+
     private func refreshAutomatically(_ record: ConnectorRecord) async {
         guard !syncingRecordIDs.contains(record.id) else { return }
         syncingRecordIDs.insert(record.id)
         appendActivity(for: record, state: .syncing, detail: "Background refresh started")
-        let refreshTask = Task { [weak self] in
-            await self?.refreshWhileSyncing(recordID: record.id)
+        if let index = records.firstIndex(where: { $0.id == record.id }) {
+            records[index].status = .syncing
+            records[index].lastError = nil
         }
         defer {
-            refreshTask.cancel()
             syncingRecordIDs.remove(record.id)
         }
 
@@ -312,6 +346,30 @@ final class SourceLibraryStore: ObservableObject {
             appendActivity(for: record, state: .needsAttention, detail: activityDetail(for: error))
         }
         await reload()
+    }
+
+    private func refresh(_ candidates: [ConnectorRecord]) async {
+        guard !candidates.isEmpty else { return }
+        await withTaskGroup(of: Void.self) { group in
+            for record in candidates where !Task.isCancelled {
+                group.addTask { [weak self, record] in
+                    guard let self else { return }
+                    await self.refreshAutomatically(record)
+                }
+            }
+            await group.waitForAll()
+        }
+        // Connector scans remain parallel, while the durable indexing queue is
+        // consumed once after all source commits have settled.
+        await processIndexingIfConfigured()
+    }
+
+    private func processIndexingIfConfigured() async {
+        guard let indexingProvider, let selectedEmbeddingModel else { return }
+        await coordinator.processQueuedIndexing(
+            using: indexingProvider,
+            embeddingModel: selectedEmbeddingModel()
+        )
     }
 
     private func record(id: UUID) async -> ConnectorRecord? {

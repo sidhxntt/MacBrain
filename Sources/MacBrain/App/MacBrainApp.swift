@@ -24,7 +24,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(OverlayWindowPolicy.applicationActivationPolicy)
-        NSApp.activate(ignoringOtherApps: true)
         coordinator.start()
     }
 

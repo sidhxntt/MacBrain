@@ -69,7 +69,8 @@ private extension ChatMessage {
             id: message.id,
             role: message.role == .user ? .user : .assistant,
             text: message.text,
-            createdAt: message.createdAt
+            createdAt: message.createdAt,
+            groundingSourceIDs: message.groundingSourceIDs
         )
     }
 }
@@ -81,7 +82,8 @@ private extension StoredMessage {
             conversationID: conversationID,
             role: message.role == .user ? .user : .assistant,
             text: message.text,
-            createdAt: message.createdAt
+            createdAt: message.createdAt,
+            groundingSourceIDs: message.groundingSourceIDs
         )
     }
 }

@@ -65,16 +65,20 @@ private struct ChatResponseBlock: Identifiable {
         case paragraph(String)
     }
 
-    let id = UUID()
+    let id: Int
     let kind: Kind
 
     static func blocks(from source: String) -> [Self] {
         var blocks: [Self] = []
         var paragraphs: [String] = []
 
+        func appendBlock(_ kind: Kind) {
+            blocks.append(.init(id: blocks.count, kind: kind))
+        }
+
         func appendParagraph() {
             guard !paragraphs.isEmpty else { return }
-            blocks.append(.init(kind: .paragraph(paragraphs.joined(separator: "\n"))))
+            appendBlock(.paragraph(paragraphs.joined(separator: "\n")))
             paragraphs.removeAll()
         }
 
@@ -84,18 +88,18 @@ private struct ChatResponseBlock: Identifiable {
                 appendParagraph()
             } else if line.hasPrefix("## ") {
                 appendParagraph()
-                blocks.append(.init(kind: .title(String(line.dropFirst(3)))))
+                appendBlock(.title(String(line.dropFirst(3))))
             } else if line.hasPrefix("### ") {
                 appendParagraph()
-                blocks.append(.init(kind: .section(String(line.dropFirst(4)))))
+                appendBlock(.section(String(line.dropFirst(4))))
             } else if line.hasPrefix("- ") {
                 appendParagraph()
-                blocks.append(.init(kind: .bullet(String(line.dropFirst(2)))))
+                appendBlock(.bullet(String(line.dropFirst(2))))
             } else {
                 paragraphs.append(line)
             }
         }
         appendParagraph()
-        return blocks.isEmpty ? [.init(kind: .paragraph(source))] : blocks
+        return blocks.isEmpty ? [.init(id: 0, kind: .paragraph(source))] : blocks
     }
 }

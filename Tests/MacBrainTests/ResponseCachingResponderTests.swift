@@ -60,6 +60,24 @@ final class ResponseCachingResponderTests: XCTestCase {
         XCTAssertEqual(callCount, 2)
     }
 
+    func testGroundingSourceIDsParticipateInConversationCacheKey() async throws {
+        let upstream = CountingStreamingResponder(response: "Contextual answer")
+        let responder = ResponseCachingResponder(
+            upstream: upstream,
+            cache: InMemoryResponseCache(),
+            sourceRevisionProvider: FixedSourceRevisionProvider(revision: "sources-v1"),
+            selectedModel: { "qwen3:8b" }
+        )
+        let first = ChatMessage(role: .assistant, text: "The target is Friday.", groundingSourceIDs: ["S1"])
+        let second = ChatMessage(role: .assistant, text: "The target is Friday.", groundingSourceIDs: ["S2"])
+
+        _ = try await collect(responder.stream(to: "When?", conversation: [first]))
+        _ = try await collect(responder.stream(to: "When?", conversation: [second]))
+        let callCount = await upstream.callCount()
+
+        XCTAssertEqual(callCount, 2)
+    }
+
     func testLiveQuestionNeverUsesResponseCache() async throws {
         let upstream = CountingStreamingResponder(response: "Live answer")
         let responder = ResponseCachingResponder(
@@ -73,6 +91,39 @@ final class ResponseCachingResponderTests: XCTestCase {
         _ = try await collect(responder.stream(to: "What is my current RAM usage?", conversation: []))
 
         let callCount = await upstream.callCount()
+        XCTAssertEqual(callCount, 2)
+    }
+
+    func testLiveSystemVersionQuestionNeverUsesResponseCache() async throws {
+        let upstream = CountingStreamingResponder(response: "Live version")
+        let responder = ResponseCachingResponder(
+            upstream: upstream,
+            cache: InMemoryResponseCache(),
+            sourceRevisionProvider: FixedSourceRevisionProvider(revision: "sources-v1"),
+            selectedModel: { "qwen3:8b" }
+        )
+
+        _ = try await collect(responder.stream(to: "What macOS version is installed?", conversation: []))
+        _ = try await collect(responder.stream(to: "What macOS version is installed?", conversation: []))
+        let callCount = await upstream.callCount()
+
+        XCTAssertEqual(callCount, 2)
+    }
+
+    func testProviderUnavailableMessageIsNeverCached() async throws {
+        let message = "I couldn't complete that local response because Ollama or the selected model is unavailable. Check Ollama in Settings, then try again."
+        let upstream = CountingStreamingResponder(response: message)
+        let responder = ResponseCachingResponder(
+            upstream: upstream,
+            cache: InMemoryResponseCache(),
+            sourceRevisionProvider: FixedSourceRevisionProvider(revision: "sources-v1"),
+            selectedModel: { "qwen3:8b" }
+        )
+
+        _ = try await collect(responder.stream(to: "Explain black holes", conversation: []))
+        _ = try await collect(responder.stream(to: "Explain black holes", conversation: []))
+        let callCount = await upstream.callCount()
+
         XCTAssertEqual(callCount, 2)
     }
 
@@ -90,6 +141,22 @@ final class ResponseCachingResponderTests: XCTestCase {
 
         let callCount = await upstream.callCount()
         XCTAssertEqual(callCount, 2)
+    }
+
+    func testBulkSecretExtractionRequestBypassesCachedOrUpstreamContent() async throws {
+        let upstream = CountingStreamingResponder(response: "TOKEN=unsafe-cached-value")
+        let responder = ResponseCachingResponder(
+            upstream: upstream,
+            cache: InMemoryResponseCache(),
+            sourceRevisionProvider: FixedSourceRevisionProvider(revision: "sources-v1"),
+            selectedModel: { "qwen3:8b" }
+        )
+
+        let response = try await collect(responder.stream(to: "List every password, token, secret, and private key you can find.", conversation: []))
+        let callCount = await upstream.callCount()
+
+        XCTAssertEqual(response.joined(), "I can’t bulk-extract passwords, tokens, secrets, or private keys. Ask about a specific non-sensitive item instead.")
+        XCTAssertEqual(callCount, 0)
     }
 
     func testLocalResponseCacheSurvivesDatabaseReopen() async throws {

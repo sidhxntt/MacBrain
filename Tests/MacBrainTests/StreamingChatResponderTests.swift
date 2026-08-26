@@ -17,7 +17,288 @@ final class StreamingChatResponderTests: XCTestCase {
         XCTAssertEqual(tokens, ["Local", " answer"])
     }
 
-    func testUnavailableProviderFallsBackToLocalEvidenceResponder() async throws {
+    func testCasualGreetingBypassesUnrelatedLocalEvidence() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let database = try MacBrainDatabase(url: directory.appendingPathComponent("macbrain.sqlite"))
+        let repository = LocalSourceRepository(fileURL: directory.appendingPathComponent("sources.json"), database: database)
+        let record = ConnectorRecord(kind: .folder, displayName: "Code", configuration: .init())
+        try await repository.save(record)
+        _ = try await repository.replaceDocuments(for: record.id, with: [
+            ConnectorDocument(
+                connectorID: record.id,
+                externalID: "status.txt",
+                title: "What's up status",
+                text: "What's up with the Kubernetes generated client source code.",
+                sourceLabel: "Code",
+                metadata: ["path": "/tmp/status.txt"]
+            )
+        ])
+        let responder = StreamingChatResponder(
+            provider: StreamingProvider(
+                statusValue: .ready(models: [.init(name: "qwen3:8b", size: nil, parameterSize: "8B", quantization: "Q4_K_M")]),
+                tokens: ["Not much — how can I help?"]
+            ),
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder()
+        )
+
+        let response = try await collect(responder.stream(to: "What's up?"))
+
+        XCTAssertEqual(response.joined(), "Not much — how can I help?")
+        XCTAssertFalse(response.joined().contains("Kubernetes"))
+        XCTAssertFalse(response.joined().contains("### Sources"))
+    }
+
+    func testGeneralQuestionNeverEmbedsOrRendersMatchingLocalSources() async throws {
+        let repository = try await seededRepository(
+            title: "Kubernetes handbook",
+            text: "Kubernetes pods run one or more containers. PRIVATE-LOCAL-MARKER",
+            path: "/tmp/kubernetes.md"
+        )
+        let provider = RoutingProbeProvider(tokens: ["Pods are Kubernetes workload units."])
+        let responder = StreamingChatResponder(
+            provider: provider,
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder()
+        )
+
+        let response = try await collect(responder.stream(to: "Explain Kubernetes pods"))
+
+        XCTAssertEqual(provider.embeddingCallCount, 0)
+        XCTAssertEqual(response.joined(), "Pods are Kubernetes workload units.")
+        XCTAssertFalse(response.joined().contains("PRIVATE-LOCAL-MARKER"))
+        XCTAssertFalse(response.joined().contains("### Sources"))
+    }
+
+    func testWeakImplicitLexicalCollisionDoesNotActivateHybridRetrieval() async throws {
+        let repository = try await seededRepository(
+            title: "Decision framework",
+            text: "Decision templates are documented. The team directory is current. Make changes carefully. PRIVATE-WEAK-EVIDENCE",
+            path: "/tmp/framework.md"
+        )
+        let provider = RoutingProbeProvider(tokens: ["Which team or decision do you mean?"])
+        let responder = StreamingChatResponder(
+            provider: provider,
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder()
+        )
+
+        let response = try await collect(responder.stream(to: "What decision did the team make?"))
+
+        XCTAssertEqual(provider.embeddingCallCount, 0)
+        XCTAssertEqual(response.joined(), "Which team or decision do you mean?")
+        XCTAssertFalse(response.joined().contains("PRIVATE-WEAK-EVIDENCE"))
+        XCTAssertFalse(response.joined().contains("### Sources"))
+    }
+
+    func testAcceptedImplicitEvidenceRunsHybridRetrievalAndRendersOnlyKnownSources() async throws {
+        let repository = try await seededRepository(
+            title: "Aurora beta decision",
+            text: "Riya owns the Aurora beta decision.",
+            path: "/tmp/aurora.md"
+        )
+        let provider = RoutingProbeProvider(tokens: ["Riya owns the Aurora beta decision. [S1]"])
+        let responder = StreamingChatResponder(
+            provider: provider,
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder()
+        )
+
+        let response = try await collect(responder.stream(to: "Who owns the Aurora beta decision?"))
+
+        XCTAssertEqual(provider.embeddingCallCount, 1)
+        XCTAssertTrue(response.joined().contains("Riya owns the Aurora beta decision. [S1]"))
+        XCTAssertTrue(response.joined().contains("### Sources"))
+        XCTAssertTrue(response.joined().contains("file:///tmp/aurora.md"))
+    }
+
+    func testBusyEvidenceIndexDoesNotDelayOrdinaryChatGeneration() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let database = try MacBrainDatabase(url: directory.appendingPathComponent("macbrain.sqlite"))
+        let repository = LocalSourceRepository(fileURL: directory.appendingPathComponent("sources.json"), database: database)
+        let responder = StreamingChatResponder(
+            provider: SlowEmbeddingStreamingProvider(),
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder(),
+            retrievalTimeout: .milliseconds(20)
+        )
+
+        let response = try await collect(responder.stream(to: "hello"))
+
+        XCTAssertEqual(response, ["Local answer"])
+    }
+
+    func testNonCooperativeEvidenceLookupDoesNotHoldTheRetrievalTimeout() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let database = try MacBrainDatabase(url: directory.appendingPathComponent("macbrain.sqlite"))
+        let repository = LocalSourceRepository(fileURL: directory.appendingPathComponent("sources.json"), database: database)
+        let responder = StreamingChatResponder(
+            provider: NonCooperativeEmbeddingStreamingProvider(),
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder(),
+            retrievalTimeout: .milliseconds(20)
+        )
+        let startedAt = Date()
+
+        let response = try await collect(responder.stream(to: "hello"))
+
+        XCTAssertEqual(response, ["Local answer"])
+        XCTAssertLessThan(Date().timeIntervalSince(startedAt), 0.25)
+    }
+
+    func testGroundedResponseFallsBackToDirectEvidenceWhenModelOmitsCitations() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
+        let record = ConnectorRecord(kind: .folder, displayName: "Aurora", configuration: .init())
+        try await repository.save(record)
+        _ = try await repository.replaceDocuments(for: record.id, with: [
+            ConnectorDocument(
+                connectorID: record.id,
+                externalID: "aurora-release.md",
+                title: "Aurora release decision",
+                text: "Riya Sen owns the beta release decision. The target beta date is 2026-09-15.",
+                sourceLabel: "Aurora",
+                metadata: ["path": "/tmp/aurora-release.md"]
+            )
+        ])
+        let responder = StreamingChatResponder(
+            provider: StreamingProvider(
+                statusValue: .ready(models: [.init(name: "qwen3:8b", size: nil, parameterSize: "8B", quantization: "Q4_K_M")]),
+                tokens: ["The core team owns the decision and the target is Q3 2025."]
+            ),
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder()
+        )
+
+        let response = try await collect(responder.stream(to: "Who owns the beta release decision and what is the target date?"))
+
+        XCTAssertTrue(response.joined().contains("Riya Sen owns the beta release decision"))
+        XCTAssertTrue(response.joined().contains("2026-09-15"))
+        XCTAssertFalse(response.joined().contains("core team"))
+        XCTAssertFalse(response.joined().contains("Q3 2025"))
+    }
+
+    func testGroundedResponseDoesNotPreemptivelyRenderRawEvidence() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
+        let record = ConnectorRecord(kind: .folder, displayName: "Aurora", configuration: .init())
+        try await repository.save(record)
+        _ = try await repository.replaceDocuments(for: record.id, with: [
+            ConnectorDocument(
+                connectorID: record.id,
+                externalID: "aurora-release.md",
+                title: "Aurora release decision",
+                text: "Riya Sen owns the beta release decision.",
+                sourceLabel: "Aurora",
+                metadata: ["path": "/tmp/aurora-release.md"]
+            )
+        ])
+        let responder = StreamingChatResponder(
+            provider: StreamingProvider(
+                statusValue: .ready(models: [.init(name: "qwen3:8b", size: nil, parameterSize: "8B", quantization: "Q4_K_M")]),
+                tokens: ["Riya Sen owns the beta release decision. [S1]"]
+            ),
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder()
+        )
+
+        let response = try await collect(responder.stream(to: "Who owns the beta release decision?"))
+
+        XCTAssertTrue(response.joined().contains("Riya Sen owns the beta release decision. [S1]"))
+        XCTAssertFalse(response.joined().contains("I can only verify the following local evidence:"))
+    }
+
+    func testCancellingGroundedResponseDoesNotRenderRawEvidence() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
+        let record = ConnectorRecord(kind: .folder, displayName: "Aurora", configuration: .init())
+        try await repository.save(record)
+        _ = try await repository.replaceDocuments(for: record.id, with: [
+            ConnectorDocument(
+                connectorID: record.id,
+                externalID: "aurora-release.md",
+                title: "Aurora release decision",
+                text: "Riya Sen owns the beta release decision. The target beta date is 2026-09-15.",
+                sourceLabel: "Aurora",
+                metadata: ["path": "/tmp/aurora-release.md"]
+            )
+        ])
+        let provider = PausingStreamingProvider()
+        let responder = StreamingChatResponder(
+            provider: provider,
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder()
+        )
+
+        let stream = responder.stream(to: "Who owns the beta release decision?")
+        let responseTask = Task { () -> [String] in
+            var tokens: [String] = []
+            do {
+                for try await token in stream { tokens.append(token) }
+            } catch {
+                // Cancellation intentionally keeps tokens already emitted by the responder.
+            }
+            return tokens
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(provider.didStartStreaming)
+
+        responseTask.cancel()
+        let response = await responseTask.value.joined()
+
+        XCTAssertFalse(response.contains("I can only verify the following local evidence:"))
+        XCTAssertFalse(response.contains("Riya Sen owns the beta release decision"))
+    }
+
+    func testMultiDocumentResponseAcceptsKnownCitedSubsetAndRendersOnlyThatSource() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
+        let record = ConnectorRecord(kind: .folder, displayName: "Aurora", configuration: .init())
+        try await repository.save(record)
+        _ = try await repository.replaceDocuments(for: record.id, with: [
+            ConnectorDocument(
+                connectorID: record.id,
+                externalID: "notes.md",
+                title: "Aurora release decision",
+                text: "Riya Sen owns the beta decision. The target date is 2026-09-15. The search foundation is SQLite FTS5.",
+                sourceLabel: "Aurora",
+                metadata: ["path": "/tmp/notes.md"]
+            ),
+            ConnectorDocument(
+                connectorID: record.id,
+                externalID: "plan.txt",
+                title: "Aurora beta plan",
+                text: "The rollback owner is Riya Sen. The rollback plan ID is AURORA-R1.",
+                sourceLabel: "Aurora",
+                metadata: ["path": "/tmp/plan.txt"]
+            )
+        ])
+        let responder = StreamingChatResponder(
+            provider: StreamingProvider(
+                statusValue: .ready(models: [.init(name: "qwen3:8b", size: nil, parameterSize: "8B", quantization: "Q4_K_M")]),
+                tokens: ["Riya Sen owns the decision and SQLite FTS5 is the search foundation. [S1]"]
+            ),
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder()
+        )
+
+        let response = try await collect(responder.stream(to: "Give the complete Aurora beta handoff: decision owner, rollback owner, target date, and search foundation."))
+
+        XCTAssertTrue(response.joined().contains("Riya Sen owns the decision"))
+        XCTAssertEqual(ChatCitationCard.parse(from: response.joined()).count, 1)
+        XCTAssertFalse(response.joined().contains("AURORA-R1"))
+    }
+
+    func testUnavailableProviderReturnsTerminalSetupMessageWithoutSearchingSources() async throws {
         let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
         let responder = StreamingChatResponder(
             provider: StreamingProvider(statusValue: .runtimeMissing, tokens: []),
@@ -28,7 +309,9 @@ final class StreamingChatResponderTests: XCTestCase {
 
         let tokens = try await collect(responder.stream(to: "What changed?"))
 
-        XCTAssertEqual(tokens, ["Fallback local answer"])
+        XCTAssertEqual(tokens.count, 1)
+        XCTAssertTrue(tokens[0].contains("Ollama or the selected model is unavailable"))
+        XCTAssertFalse(tokens[0].contains("local evidence"))
     }
 
     func testStalledProviderStatusFallsBackWithoutHoldingTheChat() async throws {
@@ -45,8 +328,91 @@ final class StreamingChatResponderTests: XCTestCase {
         let startedAt = clock.now
         let tokens = try await collect(responder.stream(to: "What changed?"))
 
-        XCTAssertEqual(tokens, ["Fallback local answer"])
+        XCTAssertEqual(tokens.count, 1)
+        XCTAssertTrue(tokens[0].contains("Ollama or the selected model is unavailable"))
         XCTAssertLessThan(startedAt.duration(to: .now), .seconds(1))
+    }
+
+    func testNonCooperativeProviderStatusCannotHoldItsDeadline() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
+        let responder = StreamingChatResponder(
+            provider: NonCooperativeStatusProvider(),
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder(),
+            providerStatusTimeout: .milliseconds(20)
+        )
+        let startedAt = ContinuousClock.now
+
+        let response = try await collect(responder.stream(to: "Explain black holes"))
+
+        XCTAssertTrue(response.joined().contains("Ollama or the selected model is unavailable"))
+        XCTAssertLessThan(startedAt.duration(to: .now), .milliseconds(250))
+    }
+
+    func testInventedCitationProducesBoundedSanitizedEvidenceFallback() async throws {
+        let repository = try await seededRepository(
+            title: "Aurora beta decision",
+            text: "<html><body>Riya owns the Aurora beta decision.</body></html>",
+            path: "/tmp/aurora.html"
+        )
+        let provider = RoutingProbeProvider(tokens: ["The owner is Riya. [S99]"])
+        let responder = StreamingChatResponder(
+            provider: provider,
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder()
+        )
+
+        let response = try await collect(responder.stream(to: "Who owns the Aurora beta decision?")).joined()
+
+        XCTAssertTrue(response.contains("couldn't verify a grounded answer"))
+        XCTAssertFalse(response.contains("<html>"))
+        XCTAssertFalse(response.contains("S99"))
+        XCTAssertLessThan(response.count, 1_500)
+        XCTAssertEqual(ChatCitationCard.parse(from: response).map(\.citationID), ["S1"])
+    }
+
+    func testGroundedShortFollowUpReusesPersistedSourceCardsWithoutEmbedding() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
+        let provider = RoutingProbeProvider(tokens: ["The target was Friday. [S1]"])
+        let responder = StreamingChatResponder(
+            provider: provider,
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder()
+        )
+        let grounded = ChatMessage(
+            role: .assistant,
+            text: "The launch target was Friday. [S1]\n\n### Sources\n- [S1](file:///tmp/launch.md) Launch plan",
+            groundingSourceIDs: ["S1"]
+        )
+
+        let response = try await collect(responder.stream(to: "When?", conversation: [grounded])).joined()
+
+        XCTAssertEqual(provider.embeddingCallCount, 0)
+        XCTAssertTrue(response.contains("The target was Friday. [S1]"))
+        XCTAssertEqual(ChatCitationCard.parse(from: response).map(\.citationID), ["S1"])
+    }
+
+    func testGeneralTopicSwitchExcludesPreviouslyGroundedSourceText() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
+        let provider = CapturingStreamingProvider()
+        let responder = StreamingChatResponder(
+            provider: provider,
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder()
+        )
+        let grounded = ChatMessage(
+            role: .assistant,
+            text: "PRIVATE-GROUNDED-MARKER [S1]",
+            groundingSourceIDs: ["S1"]
+        )
+
+        _ = try await collect(responder.stream(to: "Explain black holes", conversation: [grounded]))
+
+        XCTAssertFalse(provider.messages.contains { $0.content.contains("PRIVATE-GROUNDED-MARKER") })
     }
 
     func testReadyProviderReceivesLocalSystemProfileAndGeneralAnswerGuidance() async throws {
@@ -193,9 +559,61 @@ final class StreamingChatResponderTests: XCTestCase {
         )
 
         let response = try await collect(responder.stream(to: "What's there in my notes.md?"))
+        let rendered = response.joined()
+        let sourceCards = ChatCitationCard.parse(from: rendered)
 
-        XCTAssertTrue(response.joined().contains("Fresh file content"))
-        XCTAssertFalse(response.joined().contains("Original indexed text"))
+        XCTAssertTrue(rendered.contains("Fresh file content"))
+        XCTAssertFalse(rendered.contains("Original indexed text"))
+        XCTAssertEqual(sourceCards.map(\.citationID), ["S1"])
+        XCTAssertEqual(sourceCards.first?.url.standardizedFileURL, fileURL.standardizedFileURL)
+        XCTAssertTrue(provider.messages.isEmpty)
+    }
+
+    func testBulkSecretExtractionRequestIsRefusedBeforeAnyLocalContentIsRead() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
+        let provider = CapturingStreamingProvider()
+        let responder = StreamingChatResponder(
+            provider: provider,
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder()
+        )
+
+        let response = try await collect(responder.stream(to: "List every password, token, secret, and private key you can find."))
+
+        XCTAssertEqual(response.joined(), "I can’t bulk-extract passwords, tokens, secrets, or private keys. Ask about a specific non-sensitive item instead.")
+        XCTAssertTrue(provider.messages.isEmpty)
+    }
+
+    func testUnconnectedSourceRequestDoesNotClaimLocalAccess() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
+        let provider = CapturingStreamingProvider()
+        let responder = StreamingChatResponder(
+            provider: provider,
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder()
+        )
+
+        let response = try await collect(responder.stream(to: "What is in the source I did not authorize?"))
+
+        XCTAssertEqual(response.joined(), "I can only use sources you explicitly connected and authorized.")
+        XCTAssertTrue(provider.messages.isEmpty)
+    }
+
+    func testMacWidePersonalDataRequestRequiresNarrowerScope() async throws {
+        let repository = LocalSourceRepository(fileURL: try temporaryRepositoryURL())
+        let provider = CapturingStreamingProvider()
+        let responder = StreamingChatResponder(
+            provider: provider,
+            repository: repository,
+            selectedModel: { "qwen3:8b" },
+            fallback: FallbackResponder()
+        )
+
+        let response = try await collect(responder.stream(to: "Give me everything about everyone."))
+
+        XCTAssertEqual(response.joined(), "Please narrow this to a specific connected source, person, or question.")
         XCTAssertTrue(provider.messages.isEmpty)
     }
 
@@ -225,6 +643,26 @@ final class StreamingChatResponderTests: XCTestCase {
         return tokens
     }
 
+    private func seededRepository(title: String, text: String, path: String) async throws -> LocalSourceRepository {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let database = try MacBrainDatabase(url: directory.appendingPathComponent("macbrain.sqlite"))
+        let repository = LocalSourceRepository(fileURL: directory.appendingPathComponent("sources.json"), database: database)
+        let record = ConnectorRecord(kind: .folder, displayName: "Seeded", configuration: .init())
+        try await repository.save(record)
+        _ = try await repository.replaceDocuments(for: record.id, with: [
+            ConnectorDocument(
+                connectorID: record.id,
+                externalID: path,
+                title: title,
+                text: text,
+                sourceLabel: "Seeded",
+                metadata: ["path": path]
+            )
+        ])
+        return repository
+    }
+
     private func temporaryRepositoryURL() throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -241,9 +679,86 @@ private struct StreamingProvider: InferenceProvider {
     func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, Error> { AsyncThrowingStream { $0.finish() } }
 
     func streamChat(model: String, messages: [InferenceChatMessage]) -> AsyncThrowingStream<String, Error> {
+        return AsyncThrowingStream { continuation in
+            for token in tokens { continuation.yield(token) }
+            continuation.finish()
+        }
+    }
+}
+
+private final class RoutingProbeProvider: InferenceProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private let tokens: [String]
+    private var embeddingCalls = 0
+
+    init(tokens: [String]) {
+        self.tokens = tokens
+    }
+
+    var embeddingCallCount: Int {
+        lock.withLock { embeddingCalls }
+    }
+
+    func status() async -> InferenceProviderStatus {
+        .ready(models: [.init(name: "qwen3:8b", size: nil, parameterSize: "8B", quantization: "Q4_K_M")])
+    }
+
+    func embeddings(model: String, input: [String]) async throws -> [InferenceEmbedding] {
+        lock.withLock { embeddingCalls += 1 }
+        return input.map { _ in InferenceEmbedding(values: [1, 0]) }
+    }
+
+    func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, Error> {
+        AsyncThrowingStream { $0.finish() }
+    }
+
+    func streamChat(model: String, messages: [InferenceChatMessage]) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             for token in tokens { continuation.yield(token) }
             continuation.finish()
+        }
+    }
+}
+
+private struct SlowEmbeddingStreamingProvider: InferenceProvider {
+    func status() async -> InferenceProviderStatus {
+        .ready(models: [.init(name: "qwen3:8b", size: nil, parameterSize: "8B", quantization: "Q4_K_M")])
+    }
+
+    func embeddings(model: String, input: [String]) async throws -> [InferenceEmbedding] {
+        try await Task.sleep(for: .seconds(3_600))
+        return []
+    }
+
+    func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, Error> { AsyncThrowingStream { $0.finish() } }
+
+    func streamChat(model: String, messages: [InferenceChatMessage]) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream {
+            $0.yield("Local answer")
+            $0.finish()
+        }
+    }
+}
+
+private struct NonCooperativeEmbeddingStreamingProvider: InferenceProvider {
+    func status() async -> InferenceProviderStatus {
+        .ready(models: [.init(name: "qwen3:8b", size: nil, parameterSize: "8B", quantization: "Q4_K_M")])
+    }
+
+    func embeddings(model: String, input: [String]) async throws -> [InferenceEmbedding] {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+                continuation.resume(returning: [])
+            }
+        }
+    }
+
+    func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, Error> { AsyncThrowingStream { $0.finish() } }
+
+    func streamChat(model: String, messages: [InferenceChatMessage]) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream {
+            $0.yield("Local answer")
+            $0.finish()
         }
     }
 }
@@ -257,6 +772,56 @@ private struct HangingStatusProvider: InferenceProvider {
     func embeddings(model: String, input: [String]) async throws -> [InferenceEmbedding] { [] }
     func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, Error> { AsyncThrowingStream { $0.finish() } }
     func streamChat(model: String, messages: [InferenceChatMessage]) -> AsyncThrowingStream<String, Error> { AsyncThrowingStream { $0.finish() } }
+}
+
+private struct NonCooperativeStatusProvider: InferenceProvider {
+    func status() async -> InferenceProviderStatus {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+                continuation.resume(returning: .runtimeMissing)
+            }
+        }
+    }
+
+    func embeddings(model: String, input: [String]) async throws -> [InferenceEmbedding] { [] }
+    func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, Error> { AsyncThrowingStream { $0.finish() } }
+    func streamChat(model: String, messages: [InferenceChatMessage]) -> AsyncThrowingStream<String, Error> { AsyncThrowingStream { $0.finish() } }
+}
+
+private final class PausingStreamingProvider: InferenceProvider, @unchecked Sendable {
+    private let lock = NSLock()
+    private var startedStreaming = false
+
+    var didStartStreaming: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return startedStreaming
+    }
+
+    func status() async -> InferenceProviderStatus {
+        .ready(models: [.init(name: "qwen3:8b", size: nil, parameterSize: "8B", quantization: "Q4_K_M")])
+    }
+
+    func embeddings(model: String, input: [String]) async throws -> [InferenceEmbedding] { [] }
+    func pull(model: String) -> AsyncThrowingStream<OllamaPullProgress, Error> { AsyncThrowingStream { $0.finish() } }
+
+    func streamChat(model: String, messages: [InferenceChatMessage]) -> AsyncThrowingStream<String, Error> {
+        lock.lock()
+        startedStreaming = true
+        lock.unlock()
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                continuation.yield("An answer that will not finish")
+                do {
+                    try await Task.sleep(for: .seconds(3_600))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
 }
 
 private struct FallbackResponder: ChatResponder {

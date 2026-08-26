@@ -6,6 +6,18 @@ enum CitationValidator {
         return citationIDs(in: answer).isSubset(of: known)
     }
 
+    static func hasValidCitation(in answer: String, evidence: [RetrievalEvidence]) -> Bool {
+        let used = citationIDs(in: answer)
+        return !used.isEmpty && used.isSubset(of: Set(evidence.map(\.citationID)))
+    }
+
+    static func citesEveryRetrievedSource(in answer: String, evidence: [RetrievalEvidence]) -> Bool {
+        let used = citationIDs(in: answer)
+        let citedSources = Set(evidence.filter { used.contains($0.citationID) }.map(\.sourcePath))
+        let retrievedSources = Set(evidence.map(\.sourcePath))
+        return !retrievedSources.isEmpty && citedSources == retrievedSources
+    }
+
     static func renderedSources(for answer: String, evidence: [RetrievalEvidence]) -> String {
         let used = citationIDs(in: answer)
         return renderedSources(for: evidence.filter { used.contains($0.citationID) })
@@ -31,6 +43,7 @@ enum CitationValidator {
         if let url = URL(string: evidence.sourcePath), url.scheme != nil {
             return "- [\(evidence.citationID)](\(url.absoluteString)) \(evidence.sourceTitle)\(location)"
         }
-        return "- [\(evidence.citationID)](file://\(evidence.sourcePath)) \(evidence.sourceTitle)\(location)"
+        let fileURL = URL(fileURLWithPath: evidence.sourcePath).absoluteString
+        return "- [\(evidence.citationID)](\(fileURL)) \(evidence.sourceTitle)\(location)"
     }
 }

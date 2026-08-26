@@ -87,7 +87,13 @@ actor LocalSourceRepository {
         } else {
             snapshot.records.append(record)
         }
-        try persist()
+        // Photos and other batched connectors update their progress after every
+        // page. Persisting the entire document snapshot for each `.syncing`
+        // update makes an incremental sync quadratic. The database record still
+        // receives every update; write the recovery snapshot at terminal states.
+        if record.status != .syncing {
+            try persist()
+        }
         if let database {
             try await database.save(connectorRecord: record)
         }
@@ -120,7 +126,25 @@ actor LocalSourceRepository {
         return cachedDocuments.count
     }
 
-    func mergeDocuments(for connectorID: UUID, with documents: [ConnectorDocument]) async throws -> Int {
+    func changedExternalIDs(for connectorID: UUID, incoming documents: [ConnectorDocument]) -> Set<String> {
+        var seen = Set<String>()
+        let unique = documents.filter { seen.insert($0.externalID + $0.contentHash).inserted }
+        let existing = Dictionary(
+            uniqueKeysWithValues: snapshot.documents.filter { $0.connectorID == connectorID }.map { ($0.externalID, $0) }
+        )
+        return Set(unique.compactMap { document in
+            guard let cached = existing[document.externalID], cached.matchesCacheEntry(for: document) else {
+                return document.externalID
+            }
+            return nil
+        })
+    }
+
+    func mergeDocuments(
+        for connectorID: UUID,
+        with documents: [ConnectorDocument],
+        updateSearchIndex _: Bool = true
+    ) async throws -> Int {
         try ensureSourceHasNotBeenRemoved(connectorID)
         var documentsByExternalID: [String: ConnectorDocument] = [:]
         for document in documents {
@@ -147,9 +171,22 @@ actor LocalSourceRepository {
         snapshot.documents.append(contentsOf: cachedDocuments)
         try persist()
         if let database {
-            try await database.replaceSourceDocuments(sourceID: connectorID, documents: snapshot.documents.filter { $0.connectorID == connectorID }.map(StoredDocument.init))
+            try await database.upsertSourceDocuments(
+                sourceID: connectorID,
+                documents: cachedDocuments.map(StoredDocument.init)
+            )
         }
         return documentCount(for: connectorID)
+    }
+
+    func refreshSearchIndex(for connectorID: UUID) async throws {
+        try ensureSourceHasNotBeenRemoved(connectorID)
+        if let database {
+            try await database.replaceSourceDocuments(
+                sourceID: connectorID,
+                documents: snapshot.documents.filter { $0.connectorID == connectorID }.map(StoredDocument.init)
+            )
+        }
     }
 
     func reconcileDocuments(
@@ -244,6 +281,29 @@ actor LocalSourceRepository {
                 provider: provider,
                 embeddingModel: embeddingModel
             ).search(query, limit: limit)) ?? .empty
+        }
+
+        let documents = await search(query, limit: limit)
+        let evidence = documents.enumerated().map { index, document in
+            RetrievalEvidence(
+                citationID: "S\(index + 1)", chunkID: UUID(), sourceTitle: document.title,
+                sourceType: record(id: document.connectorID)?.kind.rawValue ?? "local",
+                sourcePath: document.metadata["path"] ?? document.metadata["relativePath"] ?? document.externalID,
+                sourceDate: document.modifiedAt ?? document.createdAt,
+                excerpt: String(document.text.prefix(1_500)), startOffset: 0,
+                endOffset: min(document.text.utf16.count, 1_500), pageNumber: nil,
+                score: 1 / Double(index + 1)
+            )
+        }
+        return EvidenceSearchResult(evidence: evidence, isLowConfidence: evidence.isEmpty)
+    }
+
+    /// Returns exact lexical candidates without waiting for Ollama or querying
+    /// the vector/graph indexes. Ambiguous prompts use this as a cheap,
+    /// deterministic activation gate before hybrid retrieval.
+    func searchLexicalEvidence(_ query: String, limit: Int = 6) async -> EvidenceSearchResult {
+        if let database {
+            return (try? await HybridEvidenceRetriever(database: database).searchLexical(query, limit: limit)) ?? .empty
         }
 
         let documents = await search(query, limit: limit)

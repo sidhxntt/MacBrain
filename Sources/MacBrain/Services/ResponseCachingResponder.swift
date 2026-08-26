@@ -20,7 +20,10 @@ struct ResponseCacheKey: Sendable, Hashable {
     init(prompt: String, conversation: [ChatMessage], model: String, sourceRevision: String) {
         self.model = model
         self.sourceRevision = sourceRevision
-        let history = conversation.suffix(8).map { "\($0.role.rawValue):\(Self.normalize($0.text))" }.joined(separator: "\n")
+        let history = conversation.suffix(8).map { message in
+            let grounding = message.groundingSourceIDs.sorted().joined(separator: ",")
+            return "\(message.role.rawValue):\(Self.normalize(message.text)):grounding=\(grounding)"
+        }.joined(separator: "\n")
         let material = [model, sourceRevision, history, Self.normalize(prompt)].joined(separator: "\n---\n")
         value = Self.digest(material)
     }
@@ -87,7 +90,13 @@ struct ResponseCachingResponder: ChatResponder {
     func stream(to prompt: String, conversation: [ChatMessage]) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                guard Self.isCacheable(prompt) else {
+                if let privacyResponse = PrivacyPromptPolicy.response(for: prompt) {
+                    continuation.yield(privacyResponse)
+                    continuation.finish()
+                    return
+                }
+
+                guard Self.isCacheable(prompt, conversation: conversation) else {
                     await Self.forward(upstream.stream(to: prompt, conversation: conversation), to: continuation)
                     return
                 }
@@ -114,7 +123,7 @@ struct ResponseCachingResponder: ChatResponder {
                         response.append(token)
                         continuation.yield(token)
                     }
-                    if !response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if Self.isReusable(response) {
                         await cache.store(response, for: key)
                     }
                     continuation.finish()
@@ -145,11 +154,26 @@ struct ResponseCachingResponder: ChatResponder {
         }
     }
 
-    private static func isCacheable(_ prompt: String) -> Bool {
+    private static func isCacheable(_ prompt: String, conversation: [ChatMessage]) -> Bool {
         if LocalFileReadTool.isFileContentRequest(prompt) { return false }
+        if ChatQueryIntentRouter().route(prompt: prompt, conversation: conversation).intent == .liveMac {
+            return false
+        }
         let normalized = prompt.lowercased()
-        if !LiveMacQueryRouter().capabilities(for: prompt).isEmpty { return false }
         let volatileTerms = ["current", "now", "today", "latest", "live", "who am i", "this mac", "my mac", "system configuration"]
         return !volatileTerms.contains { normalized.contains($0) }
+    }
+
+    private static func isReusable(_ response: String) -> Bool {
+        let normalized = response.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return false }
+        let transientMarkers = [
+            "i couldn't complete that local response",
+            "i couldn't find matching material",
+            "i found relevant local material, but i couldn't verify",
+            "didn't respond in time",
+            "check ollama in settings"
+        ]
+        return !transientMarkers.contains { normalized.contains($0) }
     }
 }

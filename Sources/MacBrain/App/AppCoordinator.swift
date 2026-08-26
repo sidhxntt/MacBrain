@@ -15,28 +15,31 @@ final class AppCoordinator {
     private(set) var activationBarController: ActivationBarController?
 
     init(
-        sourceLibrary: SourceLibraryStore = SourceLibraryStore(),
+        sourceLibrary: SourceLibraryStore? = nil,
         inferenceStore: InferenceStore? = nil
     ) {
-        self.sourceLibrary = sourceLibrary
+        let sessionDatabase = try? MacBrainDatabase()
+        self.sourceLibrary = sourceLibrary ?? SourceLibraryStore(
+            repository: LocalSourceRepository(database: sessionDatabase),
+            database: sessionDatabase
+        )
         let configuredInferenceStore = inferenceStore ?? InferenceStore()
         self.inferenceStore = configuredInferenceStore
-        let sessionDatabase = try? MacBrainDatabase()
         let sessionRepository = sessionDatabase.map(LocalChatSessionRepository.init)
         self.memoryStore = MemoryStore(repository: sessionDatabase.map(LocalMemoryRepository.init) ?? UnavailableMemoryRepository())
-        let responseCache: any ResponseCaching = (try? MacBrainDatabase()).map(LocalResponseCache.init) ?? InMemoryResponseCache()
+        let responseCache: any ResponseCaching = sessionDatabase.map(LocalResponseCache.init) ?? InMemoryResponseCache()
         let streamingResponder = StreamingChatResponder(
             provider: configuredInferenceStore.provider,
-            repository: sourceLibrary.repository,
+            repository: self.sourceLibrary.repository,
             selectedModel: { configuredInferenceStore.selectedChatModel },
             selectedEmbeddingModel: { configuredInferenceStore.selectedEmbeddingModel },
-            fallback: LocalKnowledgeResponder(repository: sourceLibrary.repository)
+            fallback: LocalKnowledgeResponder(repository: self.sourceLibrary.repository)
         )
         self.chatStore = ChatStore(
             responder: ResponseCachingResponder(
                 upstream: streamingResponder,
                 cache: responseCache,
-                sourceRevisionProvider: sourceLibrary.repository,
+                sourceRevisionProvider: self.sourceLibrary.repository,
                 selectedModel: { configuredInferenceStore.selectedChatModel }
             ),
             sessionRepository: sessionRepository,
@@ -46,6 +49,10 @@ final class AppCoordinator {
 
     func start() {
         logger.info("Application launched")
+        sourceLibrary.configureAutomaticIndexing(
+            using: inferenceStore.provider,
+            selectedEmbeddingModel: { [inferenceStore] in inferenceStore.selectedEmbeddingModel }
+        )
         let sidebar = SidebarPanelController(
             sourceLibrary: sourceLibrary,
             chatStore: chatStore,
@@ -63,15 +70,10 @@ final class AppCoordinator {
         activationBarController = activationBar
         Task { @MainActor [sourceLibrary] in
             await Task.yield()
-            NSApp.activate(ignoringOtherApps: true)
             await sourceLibrary.reload()
             await chatStore.restorePersistedSessions()
             await memoryStore.reload()
             await inferenceStore.refresh()
-            await sourceLibrary.processQueuedIndexing(
-                using: inferenceStore.provider,
-                embeddingModel: inferenceStore.selectedEmbeddingModel
-            )
             sourceLibrary.startAutomaticRefresh()
         }
     }

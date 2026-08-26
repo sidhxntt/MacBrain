@@ -4,6 +4,7 @@ set -euo pipefail
 MODE="${1:-run}"
 APP_NAME="MacBrain"
 BUNDLE_ID="com.macbrain.app"
+LOCAL_SIGNING_IDENTITY="${MACBRAIN_SIGNING_IDENTITY:-MacBrain Local Code Signing}"
 MIN_SYSTEM_VERSION="14.0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -52,6 +53,15 @@ cat >"$INFO_PLIST" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# Bind the executable and Info.plist into a single, stable app identity. Prefer
+# a persistent local signing identity when present; retain ad-hoc signing as a
+# fallback for contributors who have not created one yet.
+if /usr/bin/security find-identity -v -p codesigning | /usr/bin/grep -Fq "\"$LOCAL_SIGNING_IDENTITY\""; then
+  /usr/bin/codesign --force --deep --sign "$LOCAL_SIGNING_IDENTITY" --identifier "$BUNDLE_ID" "$APP_BUNDLE"
+else
+  /usr/bin/codesign --force --deep --sign - --identifier "$BUNDLE_ID" "$APP_BUNDLE"
+fi
 
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE"

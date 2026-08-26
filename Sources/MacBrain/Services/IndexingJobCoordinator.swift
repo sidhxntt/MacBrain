@@ -2,6 +2,7 @@ import Foundation
 
 actor IndexingJobCoordinator {
     private let database: MacBrainDatabase
+    private var activeJobIDs = Set<UUID>()
 
     init(database: MacBrainDatabase) {
         self.database = database
@@ -35,7 +36,15 @@ actor IndexingJobCoordinator {
 
     private func process(_ queuedJob: IndexingJob, using provider: any InferenceProvider, embeddingModel: String) async {
         var job = queuedJob
-        guard await sourceExists(job.sourceID) else { return }
+        guard activeJobIDs.insert(job.id).inserted else { return }
+        defer { activeJobIDs.remove(job.id) }
+        guard await sourceExists(job.sourceID) else {
+            job.state = .cancelled
+            job.detail = "Cancelled because its source no longer exists."
+            job.updatedAt = .now
+            _ = await save(job)
+            return
+        }
         job.state = .processing
         job.attempts += 1
         job.detail = "Processing local index work."

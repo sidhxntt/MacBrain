@@ -19,7 +19,7 @@ enum LocalFileIndexer {
         "pem", "key", "crt", "cer", "p12", "pfx"
     ]
     private static let excludedDirectoryNames: Set<String> = [
-        "node_modules", "build", ".build", "deriveddata", "dist", "vendor", "pods"
+        ".git", "node_modules", "build", ".build", "deriveddata", "dist", "vendor", "pods"
     ]
     private static let maximumFileSize = 10 * 1_024 * 1_024
 
@@ -50,7 +50,11 @@ enum LocalFileIndexer {
         let values = try rootURL.resourceValues(forKeys: [.isDirectoryKey])
         let fileURLs: [URL]
         if values.isDirectory == true {
-            fileURLs = try recursiveFiles(in: rootURL, excludedRelativePaths: excludedRelativePaths)
+            fileURLs = try recursiveFiles(
+                in: rootURL,
+                allowedRelativePaths: allowedRelativePaths,
+                excludedRelativePaths: excludedRelativePaths
+            )
         } else {
             fileURLs = [rootURL]
         }
@@ -82,8 +86,12 @@ enum LocalFileIndexer {
         )
     }
 
-    private static func recursiveFiles(in rootURL: URL, excludedRelativePaths: [String]) throws -> [URL] {
-        let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey]
+    private static func recursiveFiles(
+        in rootURL: URL,
+        allowedRelativePaths: Set<String>?,
+        excludedRelativePaths: [String]
+    ) throws -> [URL] {
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .fileSizeKey]
         guard let enumerator = FileManager.default.enumerator(
             at: rootURL,
             includingPropertiesForKeys: Array(keys),
@@ -95,13 +103,20 @@ enum LocalFileIndexer {
         var files: [URL] = []
         for case let url as URL in enumerator {
             let relativePath = relativePath(for: url, rootURL: rootURL)
+            let values = try? url.resourceValues(forKeys: keys)
             if shouldExclude(relativePath: relativePath, excludedRelativePaths: excludedRelativePaths) {
-                if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                if values?.isDirectory == true {
                     enumerator.skipDescendants()
                 }
                 continue
             }
-            guard let values = try? url.resourceValues(forKeys: keys), values.isRegularFile == true,
+            if let allowedRelativePaths, values?.isDirectory == true,
+               !allowedRelativePaths.contains(where: { $0.hasPrefix(relativePath + "/") }) {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard allowedRelativePaths == nil || allowedRelativePaths?.contains(relativePath) == true,
+                  let values, values.isRegularFile == true,
                   (values.fileSize ?? 0) <= maximumFileSize,
                   isSupported(url) else { continue }
             files.append(url)

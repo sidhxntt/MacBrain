@@ -70,6 +70,30 @@ final class HybridEvidenceRetrieverTests: XCTestCase {
         XCTAssertFalse(CitationValidator.hasOnlyKnownCitationIDs(in: "Answer [S99].", evidence: evidence))
     }
 
+    func testCitationValidatorEncodesSpacesInLocalFileURLs() {
+        let evidence = [
+            RetrievalEvidence(
+                citationID: "S1",
+                chunkID: UUID(),
+                sourceTitle: "Project notes",
+                sourceType: "folder",
+                sourcePath: "/tmp/Project Notes/launch plan.md",
+                sourceDate: nil,
+                excerpt: "Supported fact",
+                startOffset: 0,
+                endOffset: 14,
+                pageNumber: nil,
+                score: 0.9
+            )
+        ]
+
+        let rendered = CitationValidator.renderedSources(for: evidence)
+        let cards = ChatCitationCard.parse(from: rendered)
+
+        XCTAssertEqual(cards.map(\.citationID), ["S1"])
+        XCTAssertEqual(cards.first?.url.path, "/tmp/Project Notes/launch plan.md")
+    }
+
     private func insert(_ database: MacBrainDatabase, source: StoredSource, title: String, text: String, path: String, vector: [Float]) async throws -> StoredChunk {
         try await database.save(source: source)
         let document = StoredDocument(sourceID: source.id, externalID: path, title: title, text: text, sourceLabel: source.displayName, modifiedAt: .now, metadata: ["path": path])

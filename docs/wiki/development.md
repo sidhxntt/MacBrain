@@ -10,6 +10,6 @@ Pure logic is isolated behind protocols so deterministic tests can use temporary
 
 ## Documentation publishing
 
-`docs/wiki/` is the reviewed source of truth. Run `node scripts/render-github-wiki.mjs ../notchbrain.wiki` against a clone of `https://github.com/sidhxntt/NotchBrain.wiki.git`, inspect the generated pages, commit that separate Wiki repository, and push it. The renderer writes only MacBrain-managed pages and never deletes unrelated Wiki content.
+`docs/wiki/` is the reviewed source of truth. Run `node scripts/render-github-wiki.mjs ../macbrain.wiki` against a clone of `https://github.com/sidhxntt/MacBrain.wiki.git`, inspect the generated pages, commit that separate Wiki repository, and push it. The renderer writes only MacBrain-managed pages and never deletes unrelated Wiki content. GitHub must have an initial Wiki page before its separate Git repository can be cloned.
 
 When a capability changes, update its user behavior, state owner, source/permission boundary, failure/recovery behavior, status (implemented versus planned), and test evidence in the same change.

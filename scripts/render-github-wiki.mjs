@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const output = process.argv[2] ? resolve(process.argv[2]) : undefined;
-const repositoryURL = "https://github.com/sidhxntt/NotchBrain";
+const repositoryURL = "https://github.com/sidhxntt/MacBrain";
 const pages = [
   ["wiki/index.md", "Home.md"],
   ["wiki/overview.md", "Product-Overview.md"],

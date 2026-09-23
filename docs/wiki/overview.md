@@ -1,23 +1,44 @@
-# Product Overview
+# NotchBrain: a beginner’s guide
 
-## The problem MacBrain solves
+NotchBrain is a local-first macOS memory and work assistant. It opens from a system-level sidebar, searches a user-approved local knowledge library, and uses a local model to answer with citations. Its promise is simple: **your Mac remembers; ask from the sidebar.**
 
-Work knowledge is fragmented across repositories, Markdown, PDFs, Apple data, browser history, meeting transcripts, and small pieces of context on screen. Finding a decision normally means remembering which app owns it, switching windows, searching with the right keywords, and deciding whether the result is current. MacBrain shortens that path without turning into a cloud workspace or an unattended operating-system agent.
+## The problem it addresses
 
-The product promise is: **Your Mac remembers. Ask from the sidebar.** A global shortcut or edge interaction reveals a compact, edge-attached assistant. The user asks a question, explicitly attaches context if desired, sees local evidence, receives a streamed local-model answer, and can open the original source.
+Useful work context lives across repositories, files, PDFs, Apple data, browser profiles, and fragments such as copied terminal output. Finding an answer often means remembering which application owns the fact, locating it with the right words, and then judging whether the result is current.
+
+NotchBrain makes that retrieval path explicit:
+
+1. The user opens the sidebar and may attach temporary context.
+2. The query is classified as a system question, source query, memory command, or knowledge question.
+3. Only connected, locally committed sources are searched.
+4. A bounded evidence set is assembled with provenance.
+5. A local inference provider streams an answer or the app returns evidence directly in search-only mode.
+6. The conversation stores the question, answer, and citation identifiers locally.
+
+The product is not a whole-disk scanner, a hosted-chat account, or an autonomous computer-use agent. A future external write action must show a reviewable confirmation; the current product boundary is local read/retrieve and user-directed source opening.
 
 ## Who it is for
 
-Developers can ask about a repository, commit history, design document, copied error, or current branch without leaving their work. Knowledge workers can recall a decision across selected documents, notes, mail, calendar and meeting material. Privacy-conscious users can keep indexing, retrieval, embeddings, conversations, and memories on their Mac rather than forwarding a personal corpus to a hosted product service.
+Developers can inspect a selected repository, recent commits, documentation, or copied error while staying in their current application. Knowledge workers can reconnect selected local material without forwarding it to a product-owned service. The first release prioritizes users who value provenance and local control over broad, automatic data collection.
 
-## Delivery status
+## The architecture at a glance
 
-| Scope | Status | Meaning |
-| --- | --- | --- |
-| Core local sidebar, source library, local storage, retrieval, citations, chat, model setup, connector foundations | Implemented/in active hardening | Code and focused tests exist; macOS/provider availability still determines runtime behavior. |
-| Full MVP reliability and release experience | MVP/hardening | The ten MVP phases define exit criteria and acceptance work. |
-| Email/calendar/reminder actions, OCR/screenshots, editor/browser live context, autonomous coding actions, bundled inference | Post-MVP | Documented architectural extensions, not a promise of currently available behavior. |
+```text
+SwiftUI workspace + AppKit sidebar policy
+                 │
+       observable stores / typed services
+                 │
+ connectors → local source coordinator → SQLite + FTS5/vector search
+                 │                             │
+       explicit live context ───────────────────┘
+                 │
+      evidence policy → streaming local inference → cited response
+```
 
-## Non-goals
+SwiftUI renders the experience; AppKit owns panel and display behavior. SQLite is the durable local record. Connector and retrieval services work off the main actor. Ollama is the current local provider boundary, not a cloud fallback. See [Architecture](architecture.md) for the ownership rules.
 
-MacBrain is not a whole-disk scanner, a generic cloud chatbot, an IDE replacement, or an autonomous computer-use agent. Read-only source opening may be immediate; any future operation that changes another system must show a reviewable confirmation with target, content, and side effect.
+## What is real now, and what is still a boundary?
+
+The repository contains a substantial native shell, SQLite persistence, connector lifecycle, lexical/hybrid retrieval, evidence/citation policy, local Ollama integration, chat streaming, memory controls, and focused tests. Actual macOS permissions, local model availability, browser storage formats, and multi-display behavior still need machine-specific acceptance evidence.
+
+Email/calendar/reminder writes, continuous screen or clipboard collection, bundled MLX/`llama.cpp` inference, and autonomous coding actions are planned directions, not current guarantees. The [roadmap](roadmap.md) and individual [phase narratives](index.md#how-notchbrain-was-built) make those distinctions explicit.

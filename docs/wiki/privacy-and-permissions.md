@@ -1,24 +1,24 @@
-# Privacy and Permissions
+# Privacy and permissions
 
-## Local-first is a concrete architecture
+## Local-first is an architectural constraint
 
-MacBrain has no product-operated user-data backend and no hosted AI default. SQLite holds local sources, chunks, embeddings, conversations, citations, settings and memories; Ollama receives only the assembled prompt/evidence for a local request. This does not mean every future connector is permission-free: macOS APIs, explicit folder bookmarks, and user-selected browser/profile paths remain real local access boundaries.
+NotchBrain has no product-operated user-data backend and no hosted model default. Local SQLite stores connected source state, chunks, embeddings, sessions, citations, settings, and memories. Ollama receives an assembled local request only when the user invokes a model answer. Local does not mean permission-free: macOS APIs, selected folders, browser/profile paths, and automation remain genuine access boundaries.
 
 ## Consent and control
 
-Every source starts disconnected. The user selects it, receives its native permission request where applicable, can inspect its health/item count/last sync, pause it, reauthorize it, or delete it with associated index records. A new install indexes nothing. Disabled context providers contribute nothing. Source selection is not permission for a general disk scan.
+A new install connects no source. Each connector has an explicit configuration and health state; users can inspect it, pause it, reauthorize it, or delete its local index. Selecting one source does not authorize a broad disk scan, live clipboard collection, screen capture, or unrelated app access. Context attachments are visible before send, bounded, removable, and next-request scoped by default.
 
-## Data categories and handling
+## Data handling
 
-| Data | Normal location | Rule |
+| Data class | Local owner | Rule |
 | --- | --- | --- |
-| Sources/chunks/embeddings | Local SQLite/app storage | Searchable only after a verified committed source generation. |
-| Chat/citations | Local session store | Persist evidence IDs and answer metadata for explainability. |
-| Explicit memories | Local memory store | Inspect/edit/export/delete; displayed separately from source evidence. |
-| Credentials | Keychain | Never ordinary preferences, logs, or repository files. |
-| Context | In-memory/local request state | Visible, removable, bounded, redacted, next-request scoped by default. |
-| Diagnostics | Local redacted logs | Event/timing/status, never source content or prompt/response text. |
+| Source documents/chunks/embeddings | SQLite source/index records | Searchable only after a verified committed source state. |
+| Chat and citations | Local chat session records | Preserve evidence IDs and local metadata for explainability. |
+| Explicit memory | Local memory repository | Inspect/edit/export/delete separately from source evidence. |
+| Provider configuration/secrets | Settings/secure-storage boundary | Never write secrets or source content to ordinary diagnostics. |
+| Request context | Attachment/request state | Visible, bounded, redacted, and removable before sending. |
+| Diagnostics | Coarse local logs | Status/timing/error category, not raw source or prompt payload. |
 
-## Permissions and failure behavior
+## Permission failure is product state
 
-Denied Automation, Contacts, Photos, Calendar/Reminders, Full Disk Access, Accessibility, clipboard, screen capture, or folder access does not disable unrelated sources or search. The UI reports a recoverable health state. Revocation excludes the connector until reauthorization and successful local sync. Future external write actions require a confirmation card showing target, content and side effect.
+Denied Automation, Contacts, Photos, Calendar/Reminders, Full Disk Access, Accessibility, folder, or browser access should not disable unrelated search. The connector or live-context capability reports a recoverable health state. Revocation makes the affected source ineligible until reauthorization and a successful sync. Future actions that modify another app, file, or service must show a confirmation card with target, content, and side effect.

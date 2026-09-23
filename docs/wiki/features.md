@@ -1,21 +1,31 @@
-# Features and Capabilities
+# Features: the NotchBrain experience
 
-## System-wide sidebar
+This page separates the user-visible product surface from the source-level implementation. For owners, safeguards, and tests, use the [engineering implementation guide](implementation-guide.md).
 
-`SidebarPanelController`, `SidebarPanel`, AppKit window policy, and SwiftUI workspace views provide a narrow panel on a chosen screen edge. The panel is resizable, focusable, dismissible, multi-display aware, and can remain above ordinary application windows within its defined scope. AppKit owns panel lifecycle and window level; SwiftUI renders the chat, sources, settings, onboarding, and memory surfaces. This split avoids asking a view hierarchy to solve display reconfiguration, focus, or Spaces behavior.
+## System-wide sidebar — implemented foundation
 
-## Local chat and explicit context
+The AppKit-backed `SidebarPanelController` presents a focusable, resizable, dismissible edge panel while SwiftUI renders chat, sources, settings, onboarding, and memories. Geometry and activation policy are isolated from views so display changes, edge selection, panel focus, and click shielding do not become undocumented gesture behavior.
 
-`ChatStore` owns messages, streaming state, cancellation, session history, and user-visible errors. `ContextAttachment` records selected text, clipboard, active app/window, or repository facts with source, timestamp, size, expiry, and redaction state. Context is visible, bounded, removable before send, and scoped to the next request by default. MacBrain does not continuously collect screens, keystrokes, clipboard contents, browser data, or editor text.
+The boundary: a physical multi-display/Spaces acceptance run remains stronger evidence than unit tests alone.
 
-## Knowledge library
+## Local chat and temporary context — implemented foundation
 
-Users choose connectors individually. Current connector families include folders, Markdown/plain text, PDFs, Git repositories, Apple Notes/Mail/Calendar/Reminders/Contacts, browser profiles, Messages, Photos metadata, Apple Books, and meeting transcript files. Connector health shows permission, item count, last successful sync, pause/resume, and failure state. A source is usable only after a verified committed generation, so chat never retrieves from a half-replaced scan.
+`ChatStore` owns streamed messages, cancellation, recoverable errors, and session history. `ContextAttachment` makes selected text, clipboard, active app/window, repository facts, and supported live snapshots visible before a request. Attachments are size-limited, removable, redactable, and scoped to a request by default.
 
-## Evidence-grounded answers
+NotchBrain does not continuously read keystrokes, screens, clipboard history, browser data, or editor text. A source connection is not permission for those other data classes.
 
-`HybridEvidenceRetriever` combines lexical FTS5 matches, vector similarity, source diversity, recency, and graph-aware expansion where available. `EvidenceAcceptancePolicy` limits evidence to authorized, relevant, citation-capable records. Source cards contain title/type, location, date, excerpt, score, and stable citation ID. Search-only mode returns evidence without calling the model. The answer prompt requires uncertainty when evidence is weak or conflicting; `CitationValidator` rejects references that cannot map to a real excerpt.
+## User-selected knowledge sources — implemented foundation
 
-## Local models, memories, and recovery
+The source library offers folders, Git repositories, Apple productivity data, browser profiles, Messages, Photos metadata, Apple Books, and meeting transcript files through individual connector records. Health describes access, item count, last successful sync, pause/resume, and failure state. Source content becomes searchable only after a successful local commit; one failed connector leaves other committed sources usable.
 
-Ollama is the MVP inference backend. It is detected locally, configured separately for chat and embeddings, streamed with cancellation, and never requires a hosted default. Conversations and explicit memories are separate local records: a memory can be inspected, edited, exported, or forgotten and never pretends to be source evidence. If generation is unavailable, existing indexed search stays useful; if one connector fails, other committed sources remain queryable.
+Availability is connector- and machine-dependent. Some sources require TCC, Automation, or Full Disk Access and report a recovery state instead of trying to bypass macOS.
+
+## Evidence-grounded retrieval — implemented foundation
+
+`HybridEvidenceRetriever` combines lexical and semantic candidates, applies deduplication, source diversity, recency, graph-aware expansion where present, and an evidence budget. `EvidenceAcceptancePolicy` rejects unsuitable records; `CitationValidator` ensures rendered citations refer to accepted excerpts. Search-only mode returns the evidence without invoking a model.
+
+This is a defense against unsupported claims, not a guarantee that a local model will never make an incorrect inference. The prompt requires uncertainty when support is weak or conflicting.
+
+## Local inference, memories, and recovery — implemented foundation
+
+Ollama is detected and configured locally with separate chat and embedding models. Responses stream with cancellation and actionable setup/failure state; when inference is unavailable, local source search remains useful. Explicit memories live in a separate local repository and can be inspected, edited, exported, or forgotten. A memory may guide a response but never impersonates a cited source document.

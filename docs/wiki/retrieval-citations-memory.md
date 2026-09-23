@@ -1,15 +1,17 @@
-# Retrieval, Citations, and Memory
+# Retrieval, citations, and memory
 
 ## Evidence pipeline
 
-`HybridEvidenceRetriever` accepts an authorized query scope and combines FTS5 and vector candidates. It normalizes scores, removes duplicate/adjacent chunks, promotes source diversity and recency, optionally expands a lightweight graph, and passes only a bounded set through `EvidenceAcceptancePolicy`. `ContextAssembler` adds selected conversation turns and explicit live context without exceeding the configured model budget.
+`HybridEvidenceRetriever` accepts an authorized query scope and combines lexical and semantic candidates. It can fall back to lexical search, removes duplicates/near-adjacent repeats, favors diversity and recency, performs bounded graph expansion where available, and passes candidates to `EvidenceAcceptancePolicy`. `ContextAttachment` and eligible conversation turns are added only within the prompt budget.
 
-Each `RetrievalEvidence` preserves a stable citation ID, source title/type/location/date, excerpt, offset/page and score. `CitationValidator` ensures a rendered citation maps to a real accepted excerpt. Search-only mode stops here and returns the evidence directly; generation is not required to inspect local knowledge.
+Every `RetrievalEvidence` carries a stable citation identifier plus title, source type, location, date, excerpt, score, and available offset/page metadata. `CitationValidator` requires a rendered reference to resolve to accepted evidence. Search-only stops at this point: a user can inspect local evidence without asking a model to summarize it.
 
 ## Grounded generation
 
-`OllamaProvider` receives structured instructions, the question, bounded evidence and authorized context—not an unbounded database dump. `StreamingChatResponder` sends partial deltas to the chat store, supports stop/retry, and keeps failure separate from a completed answer. The prompt contract distinguishes quoted evidence from inference and requires explicit uncertainty for missing or conflicting support. Source cards appear with the answer and can open the native origin.
+`StreamingChatResponder` gives the local provider structured instructions, a question, bounded evidence, and authorized context—not a database dump. It streams deltas, supports cancellation/retry, and keeps a generation failure distinct from a completed response. The prompt asks the model to mark missing/conflicting support as uncertainty, while the UI displays citation cards beside the answer.
+
+This is evidence-aware generation, not proof that every generated sentence is correct. Source cards and opening the original material remain the final audit path.
 
 ## Memories are not evidence
 
-`LocalMemoryRepository` and `MemoryStore` hold assistant-created, explicitly managed durable information. A user can save, inspect, edit, export, delete, or forget memories. Indexed source content and memories are different record categories with different UI and retrieval semantics: a memory may guide a response but must not masquerade as a cited document. Forgetting removes it from memory retrieval; deleting a source removes it from evidence retrieval.
+`LocalMemoryRepository` and `MemoryStore` represent explicit, durable user-managed information. Users can inspect, edit, export, delete, or forget it. Memory records and indexed source records use different models and UI semantics: a memory may provide helpful continuity, but it cannot masquerade as a cited document. Removing a source removes its evidence eligibility; forgetting a memory removes it from memory use.

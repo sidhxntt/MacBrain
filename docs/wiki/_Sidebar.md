@@ -1,6 +1,6 @@
 <!-- Rendered by GitHub Wiki as persistent navigation. -->
 
-## NotchBrain
+## MacBrain
 
 - [[Home|Home]]
 - [[Overview|Overview]]

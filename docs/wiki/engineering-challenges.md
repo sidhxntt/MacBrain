@@ -1,12 +1,12 @@
-# Engineering challenges: how NotchBrain earns trust locally
+# Engineering challenges: how MacBrain earns trust locally
 
-NotchBrain may look like a sidebar, but its difficult work happens between a user granting narrowly scoped access and a model rendering a claim with a citation. The app must keep macOS desktop behavior predictable, personal data consentful, local search internally consistent, and model output tied to evidence.
+MacBrain may look like a sidebar, but its difficult work happens between a user granting narrowly scoped access and a model rendering a claim with a citation. The app must keep macOS desktop behavior predictable, personal data consentful, local search internally consistent, and model output tied to evidence.
 
 Each section states the user-facing failure first, then the underlying engineering problem, the repository treatment, evidence, and the boundary that remains. The [implementation guide](implementation-guide.md) maps these claims to the owning code and tests.
 
 ## Useful terms
 
-| Term | Meaning in NotchBrain |
+| Term | Meaning in MacBrain |
 | --- | --- |
 | Connector | An opt-in adapter that translates one local source family into normalized documents. |
 | Committed generation | A complete, transactionally stored view of a source that retrieval is allowed to use. |
@@ -26,7 +26,7 @@ A panel must be reachable beside any application without stealing focus at the w
 
 SwiftUI is appropriate for the changing chat surface but does not own `NSPanel` lifecycle, window level, display frames, focus, Spaces, or global activation. Treating those as view-state details couples rendering to window-manager behavior that cannot be reliably unit-tested from a view hierarchy.
 
-### How NotchBrain handles it
+### How MacBrain handles it
 
 `SidebarPanelController` owns AppKit construction and presentation. `OverlayWindowPolicy`, `SidebarGeometry`, `ActivationBarGeometry`, screen-provider abstractions, and click-shield policy make the rules explicit. SwiftUI views receive presentation state rather than deciding their own window level or coordinates. The activation bar and panel are independent surfaces with focused interaction policies.
 
@@ -48,7 +48,7 @@ A folder or connector scan may be slow, denied access, cancelled, interrupted, o
 
 File discovery, hashing, chunking, embedding, graph extraction, FTS maintenance, stale pruning, and connector-health updates are separate operations. A source may also be deleted while an actor has yielded to SQLite. “Just replace the index” is unsafe when an interruption falls between document and chunk writes.
 
-### How NotchBrain handles it
+### How MacBrain handles it
 
 `LocalSourceCoordinator`, `IndexingJobCoordinator`, `LocalSourceRepository`, and `MacBrainDatabase` normalize source data then commit a reconciled generation in SQLite transactions. Unchanged items stay local; changed and missing external IDs are reconciled only after a completed scan. A reentrancy check prevents an in-flight commit from resurrecting a source removed by the user. Health records last verified state and errors, so a failed refresh preserves prior verified search rather than presenting partial content as current.
 
@@ -70,7 +70,7 @@ The five-minute refresh scheduler is a deliberate MVP trade-off, not low-latency
 
 Semantic matches can feel plausible while overlooking identifiers; lexical results can over-rank repeated boilerplate. Returning too much context also consumes unified memory and increases the chance that a model treats weak material as proof. Optional graph connections must improve recall without replacing direct excerpts.
 
-### How NotchBrain handles it
+### How MacBrain handles it
 
 `HybridEvidenceRetriever` fuses lexical and vector results, falls back to lexical-only if a semantic path degrades, deduplicates adjacent/repeated chunks, and promotes diversity and recency. `EvidenceAcceptancePolicy` applies relevance, authorization, citation capability, and evidence-budget checks. Graph expansion is bounded and additive; `DeterministicGraphExtractor` provides a local deterministic starting point rather than an opaque graph service.
 
@@ -92,7 +92,7 @@ A local model can generate polished prose that is unsupported, misattribute a so
 
 The model only sees a prompt, while the UI needs a stable source card, safe location, excerpt, and citation identifier. Streaming means the app must handle partial text, cancellation, failure, and source availability without fabricating a completed answer.
 
-### How NotchBrain handles it
+### How MacBrain handles it
 
 `StreamingChatResponder` builds a bounded evidence/context prompt and streams through `ChatStore`. `CitationValidator` maps citations to accepted `RetrievalEvidence`; `ChatCitationCard` renders source metadata. The prompt policy asks for uncertainty under missing or conflicting support. `LocalKnowledgeResponder` and search-only routes remain useful when generation cannot run. `LocalMemoryRepository` is a distinct persistence path, so memories cannot automatically become evidence.
 
@@ -108,13 +108,13 @@ Citation validation proves a shown citation resolves to an accepted excerpt; it 
 
 ### The problem
 
-On Apple silicon, macOS, active applications, model weights, token cache, embedding work, and NotchBrain share one memory pool. A model that loads successfully can still make the desktop feel unusable or fail mid-response.
+On Apple silicon, macOS, active applications, model weights, token cache, embedding work, and MacBrain share one memory pool. A model that loads successfully can still make the desktop feel unusable or fail mid-response.
 
 ### Why it was difficult
 
 Provider setup, chat streaming, embeddings, connection retries, timeouts, model roles, and system-profile questions all cross a local HTTP boundary. A local-only product cannot quietly fall back to a hosted provider when this fails.
 
-### How NotchBrain handles it
+### How MacBrain handles it
 
 `InferenceProvider`, `OllamaClient`, `OllamaProvider`, `InferenceStore`, and `StreamingChatResponder` keep provider behavior behind typed status and error models. Chat and embedding models are selected separately; bounded evidence and prompt budgets reduce avoidable context growth. Streaming supports cancellation, watchdogs, and transient local-connection retry. If Ollama is absent or unavailable, the app reports recovery guidance and keeps evidence/search paths available.
 
@@ -136,7 +136,7 @@ Clipboard, active-app, browser, selected-text, and screen features can improve a
 
 macOS authorization is fragmented: folders, Accessibility/Automation, Full Disk Access, contacts, photos, calendars, and browser storage each fail differently. A connector that has permission to read one source must not become broad permission to inspect the rest of the Mac.
 
-### How NotchBrain handles it
+### How MacBrain handles it
 
 `ContextSafeguards`, `LiveMacContextProvider`, `SourceQueryScope`, `SecurityScopedLocalAccess`, and connector-specific status make consent and data category explicit. Attachments are visible, bounded, redactable, removable, and next-request scoped. Connectors start disconnected; permission failure becomes recoverable health. Browser profile discovery is explicit, source selection is separate from other live-context capabilities, and query scope excludes unauthorized sources.
 

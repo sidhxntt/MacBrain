@@ -2,7 +2,7 @@
 
 ## Consent before discovery
 
-NotchBrain indexes nothing at first launch. A user chooses an individual connector or source, understands what it reads, grants its relevant access, and can pause, reauthorize, or delete it. Folder access uses security-scoped local access; Apple data uses its platform boundary; browser-profile discovery begins only after an explicit connector action. Messages and Books may require Full Disk Access and report that need as health rather than circumventing it.
+MacBrain indexes nothing at first launch. A user chooses an individual connector or source, understands what it reads, grants its relevant access, and can pause, reauthorize, or delete it. Folder access uses security-scoped local access; Apple data uses its platform boundary; browser-profile discovery begins only after an explicit connector action. Messages and Books may require Full Disk Access and report that need as health rather than circumventing it.
 
 ## One normalized document contract
 

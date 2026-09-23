@@ -2,7 +2,7 @@
 
 ## Build and test
 
-NotchBrain is a Swift Package targeting macOS 14+. Run:
+MacBrain is a Swift Package targeting macOS 14+. Run:
 
 ```bash
 swift test
@@ -23,9 +23,9 @@ A passing test suite is strong evidence for the code paths it executes; it is no
 `docs/wiki/` is the reviewed source of truth. Run:
 
 ```bash
-node scripts/render-github-wiki.mjs ../notchbrain.wiki
+node scripts/render-github-wiki.mjs ../macbrain.wiki
 ```
 
-against a clone of `https://github.com/sidhxntt/NotchBrain.wiki.git`. Inspect the generated Wiki diff, commit that separate Wiki repository, and push it. The renderer writes only managed NotchBrain pages and does not delete hand-maintained content.
+against a clone of `https://github.com/sidhxntt/MacBrain.wiki.git`. Inspect the generated Wiki diff, commit that separate Wiki repository, and push it. The renderer writes only managed MacBrain pages and does not delete hand-maintained content.
 
 When behavior changes, update its product behavior, state owner, consent/failure boundary, implementation-guide evidence, and delivery label in the same change.

@@ -2,7 +2,7 @@
 
 ## Problem
 
-NotchBrain needs rich local sources without treating the user’s whole disk or every application database as an implicit corpus.
+MacBrain needs rich local sources without treating the user’s whole disk or every application database as an implicit corpus.
 
 ## Treatment
 

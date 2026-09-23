@@ -2,7 +2,7 @@
 
 ## Product boundary
 
-NotchBrain is a native macOS app, not a remote service. SwiftUI owns presentation; AppKit owns panel/window behavior; local actors and services own durable data, connector I/O, retrieval, and inference boundaries. The MVP is a local retrieval assistant, not an autonomous agent with invisible filesystem or external-action authority.
+MacBrain is a native macOS app, not a remote service. SwiftUI owns presentation; AppKit owns panel/window behavior; local actors and services own durable data, connector I/O, retrieval, and inference boundaries. The MVP is a local retrieval assistant, not an autonomous agent with invisible filesystem or external-action authority.
 
 ## Runtime layers
 

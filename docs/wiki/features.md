@@ -1,4 +1,4 @@
-# Features: the NotchBrain experience
+# Features: the MacBrain experience
 
 This page separates the user-visible product surface from the source-level implementation. For owners, safeguards, and tests, use the [engineering implementation guide](implementation-guide.md).
 
@@ -12,7 +12,7 @@ The boundary: a physical multi-display/Spaces acceptance run remains stronger ev
 
 `ChatStore` owns streamed messages, cancellation, recoverable errors, and session history. `ContextAttachment` makes selected text, clipboard, active app/window, repository facts, and supported live snapshots visible before a request. Attachments are size-limited, removable, redactable, and scoped to a request by default.
 
-NotchBrain does not continuously read keystrokes, screens, clipboard history, browser data, or editor text. A source connection is not permission for those other data classes.
+MacBrain does not continuously read keystrokes, screens, clipboard history, browser data, or editor text. A source connection is not permission for those other data classes.
 
 ## User-selected knowledge sources — implemented foundation
 

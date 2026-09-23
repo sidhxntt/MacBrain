@@ -1,12 +1,12 @@
-# NotchBrain: a beginner’s guide
+# MacBrain: a beginner’s guide
 
-NotchBrain is a local-first macOS memory and work assistant. It opens from a system-level sidebar, searches a user-approved local knowledge library, and uses a local model to answer with citations. Its promise is simple: **your Mac remembers; ask from the sidebar.**
+MacBrain is a local-first macOS memory and work assistant. It opens from a system-level sidebar, searches a user-approved local knowledge library, and uses a local model to answer with citations. Its promise is simple: **your Mac remembers; ask from the sidebar.**
 
 ## The problem it addresses
 
 Useful work context lives across repositories, files, PDFs, Apple data, browser profiles, and fragments such as copied terminal output. Finding an answer often means remembering which application owns the fact, locating it with the right words, and then judging whether the result is current.
 
-NotchBrain makes that retrieval path explicit:
+MacBrain makes that retrieval path explicit:
 
 1. The user opens the sidebar and may attach temporary context.
 2. The query is classified as a system question, source query, memory command, or knowledge question.
@@ -41,4 +41,4 @@ SwiftUI renders the experience; AppKit owns panel and display behavior. SQLite i
 
 The repository contains a substantial native shell, SQLite persistence, connector lifecycle, lexical/hybrid retrieval, evidence/citation policy, local Ollama integration, chat streaming, memory controls, and focused tests. Actual macOS permissions, local model availability, browser storage formats, and multi-display behavior still need machine-specific acceptance evidence.
 
-Email/calendar/reminder writes, continuous screen or clipboard collection, bundled MLX/`llama.cpp` inference, and autonomous coding actions are planned directions, not current guarantees. The [roadmap](roadmap.md) and individual [phase narratives](index.md#how-notchbrain-was-built) make those distinctions explicit.
+Email/calendar/reminder writes, continuous screen or clipboard collection, bundled MLX/`llama.cpp` inference, and autonomous coding actions are planned directions, not current guarantees. The [roadmap](roadmap.md) and individual [phase narratives](index.md#how-macbrain-was-built) make those distinctions explicit.

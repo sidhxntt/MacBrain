@@ -2,7 +2,7 @@
 
 ## Local-first is an architectural constraint
 
-NotchBrain has no product-operated user-data backend and no hosted model default. Local SQLite stores connected source state, chunks, embeddings, sessions, citations, settings, and memories. Ollama receives an assembled local request only when the user invokes a model answer. Local does not mean permission-free: macOS APIs, selected folders, browser/profile paths, and automation remain genuine access boundaries.
+MacBrain has no product-operated user-data backend and no hosted model default. Local SQLite stores connected source state, chunks, embeddings, sessions, citations, settings, and memories. Ollama receives an assembled local request only when the user invokes a model answer. Local does not mean permission-free: macOS APIs, selected folders, browser/profile paths, and automation remain genuine access boundaries.
 
 ## Consent and control
 

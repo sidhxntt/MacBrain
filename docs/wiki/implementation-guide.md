@@ -1,6 +1,6 @@
 # Engineering implementation guide
 
-This is the code-facing companion to [Features](features.md) and [Engineering challenges](engineering-challenges.md). It identifies the owning components, the safety boundary, and the available verification evidence. Paths use the current Swift target name `MacBrain`; the published product name is NotchBrain.
+This is the code-facing companion to [Features](features.md) and [Engineering challenges](engineering-challenges.md). It identifies the owning components, the safety boundary, and the available verification evidence. Paths use the current Swift target name `MacBrain`, which is also the published product name.
 
 | Feature group | Primary ownership | Safety / failure boundary | Verification evidence |
 | --- | --- | --- | --- |

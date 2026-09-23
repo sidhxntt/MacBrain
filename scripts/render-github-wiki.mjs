@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const output = process.argv[2] ? resolve(process.argv[2]) : undefined;
-const repositoryURL = "https://github.com/sidhxntt/NotchBrain";
+const repositoryURL = "https://github.com/sidhxntt/MacBrain";
 const pages = [
   ["wiki/index.md", "Home.md"],
   ["wiki/overview.md", "Overview.md"],
@@ -56,4 +56,4 @@ for (const [source, destination] of pages) {
   const markdown = await readFile(resolve(root, "docs", source), "utf8");
   await writeFile(resolve(output, destination), rewriteLinks(markdown, source));
 }
-console.log(`Rendered ${pages.length} NotchBrain Wiki pages into ${output}`);
+console.log(`Rendered ${pages.length} MacBrain Wiki pages into ${output}`);

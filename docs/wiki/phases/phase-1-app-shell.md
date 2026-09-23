@@ -2,7 +2,7 @@
 
 ## Problem
 
-Before any knowledge or model feature can be useful, NotchBrain needs a system-level home that behaves predictably beside other macOS apps.
+Before any knowledge or model feature can be useful, MacBrain needs a system-level home that behaves predictably beside other macOS apps.
 
 ## Treatment
 

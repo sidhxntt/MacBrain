@@ -1,6 +1,6 @@
 # Technology stack
 
-NotchBrain’s stack is selected for a local, responsive, evidence-first macOS experience—not for operating a hosted knowledge service.
+MacBrain’s stack is selected for a local, responsive, evidence-first macOS experience—not for operating a hosted knowledge service.
 
 | Layer | Technology | Role and trade-off |
 | --- | --- | --- |
@@ -17,7 +17,7 @@ NotchBrain’s stack is selected for a local, responsive, evidence-first macOS e
 
 ## Why hybrid retrieval
 
-Personal knowledge mixes exact nouns and fuzzy recollection. FTS5 finds `PR-482`, path fragments, and literal quotes; embeddings find a decision expressed with different words. NotchBrain fuses both and then applies source scope, deduplication, diversity, recency, and an evidence budget. The result is intentionally smaller than “everything that matched,” because a local model needs defensible evidence rather than an unbounded corpus dump.
+Personal knowledge mixes exact nouns and fuzzy recollection. FTS5 finds `PR-482`, path fragments, and literal quotes; embeddings find a decision expressed with different words. MacBrain fuses both and then applies source scope, deduplication, diversity, recency, and an evidence budget. The result is intentionally smaller than “everything that matched,” because a local model needs defensible evidence rather than an unbounded corpus dump.
 
 ## Why Ollama first, not forever
 

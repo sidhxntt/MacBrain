@@ -1,6 +1,6 @@
-# NotchBrain documentation
+# MacBrain documentation
 
-NotchBrain is a native, local-first macOS knowledge assistant. It puts an edge-attached sidebar beside the work already on a Mac, searches only sources a user has explicitly connected, and produces evidence-grounded local answers.
+MacBrain is a native, local-first macOS knowledge assistant. It puts an edge-attached sidebar beside the work already on a Mac, searches only sources a user has explicitly connected, and produces evidence-grounded local answers.
 
 This documentation is candid about delivery state:
 
@@ -20,7 +20,7 @@ This documentation is candid about delivery state:
 8. [Privacy and permissions](privacy-and-permissions.md) — consent boundaries and recovery behavior.
 9. [Conclusion](conclusion.md) — the product’s core architectural commitments and current evidence boundary.
 
-## How NotchBrain was built
+## How MacBrain was built
 
 The build sequence separates native-shell risk, local-data correctness, and model behavior so a polished chat surface never hides an unsafe knowledge pipeline.
 

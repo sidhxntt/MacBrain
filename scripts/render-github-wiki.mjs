@@ -45,7 +45,7 @@ function rewriteLinks(markdown, source) {
     const [path, anchor = ""] = href.split("#", 2);
     const target = posix.normalize(posix.join(posix.dirname(source), path));
     const page = names.get(target);
-    if (page) return anchor ? `[${text}](${page}#${anchor})` : `[[${page}|${text}]]`;
+    if (page) return `[${text}](${page}${anchor ? `#${anchor}` : ""})`;
     const repoPath = posix.normalize(posix.join("docs", posix.dirname(source), path));
     return repoPath.startsWith("../") ? full : `[${text}](${repositoryURL}/blob/main/${repoPath}${anchor ? `#${anchor}` : ""})`;
   });

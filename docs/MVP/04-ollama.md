@@ -31,7 +31,7 @@ When Ollama is ready, chat responses stream into the conversation as partial tok
 
 Every chat receives a bounded, local system profile: current account display name, Mac name/model, processor, memory, macOS version, disk capacity, locale, and time zone. This profile lets MacBrain answer questions about the user’s Mac without connecting a source. It excludes serial numbers, credentials, personal files, contacts, messages, app content, and network identifiers.
 
-## Manual Apple-silicon acceptance
+## Manual Apple-silicon acceptance 
 
 1. Install and open Ollama for Mac.
 2. In MacBrain Settings, choose **Check local setup**.
